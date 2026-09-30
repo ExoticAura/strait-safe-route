@@ -25,22 +25,30 @@ python -m saferoute.serve            # opens the chart at http://127.0.0.1:8765
 | Scope item | What was built | Where |
 |---|---|---|
 | **1. Navigational network construction** | Static board: OpenStreetMap coastline, depth (GEBCO file or declared proxy), shore clearance, schematic TSS lanes, MPA anchorages; stationary ships rasterised on top per snapshot; 16-neighbour **directed** graph | `seagrid.py`, `obstacles.py`, `network.py` |
-| **2. Static pathfinding** | Dijkstra, A* (admissible great-circle heuristic), weighted A*, spatially distinct alternatives, Theta*-style smoothing; three objectives: shortest / balanced / safest | `algorithms.py`, `network.py`, `routing.py` |
+| **2. Static pathfinding** | Dijkstra, A* (admissible great-circle heuristic), weighted A*, spatially distinct alternatives, Theta*-style smoothing, turn radii per waypoint (sailed track, re-search if a turn is too tight); three objectives: shortest / balanced / safest | `algorithms.py`, `network.py`, `sailing.py`, `routing.py` |
 | **3. Baseline route validation** | Paired comparison with historical voyages on distance and reliability (ships met, closest approach, hard breaches, shallow water, land), t-test + Wilcoxon | `ais.py`, `evaluation.py`, `scripts/run_pipeline.py` |
 
 ## Headline results (Panamax, synthetic snapshot of 217 ships; `outputs/`)
 
+All figures are measured on the **sailed track** (the legs joined by the
+turns the ship can actually make, see *How the ship turns*), not on the
+search polyline.
+
 * **Safest vs shortest**, averaged over all 16 entrance↔terminal routes: ships
-  met **2.12 vs 5.88** (−64 %), NM sailed inside a target CPA **1.47 vs 4.24**,
-  for **+0.07 NM** of distance (38.85 vs 38.78 NM). East entrance → Pasir
-  Panjang: **4 ships met instead of 16** for +0.45 NM.
+  met **2.13 vs 6.38** (−67 %), NM sailed inside a target CPA **1.56 vs 4.38**,
+  at the same distance (38.61 vs 38.65 NM). East entrance → Pasir Panjang:
+  **3 ships met instead of 18** for +0.42 NM.
 * **A\* vs Dijkstra**: identical optimal cost on every route (gap 0.0), with
-  **56 % fewer nodes expanded** on the 16-neighbour graph (49 % on 8-neighbour).
+  about half the nodes expanded.
 * **Validation** against 320 baseline voyages (current-practice lane following
   that knows land and depth but not where ships are anchored): planned routes
-  are **2.1 % shorter** and meet **88 % fewer ships** (safest mode; 15.4 → 1.8
+  are **2.5 % shorter** and meet **88 % fewer ships** (safest mode; 15.4 → 1.9
   per voyage, p < 0.0001); **100 %** of planned routes are free of hard CPA
   breaches against **36 %** of baseline voyages.
+* **Turning**: every route, for every ship class, is sailable: no turn tighter
+  than 1.5 ship lengths at sea (1 L under pilotage near a terminal). 11 of
+  48 Panamax routes had a corner the ship could not make on the first search
+  and were pushed wider; the sailed track is at most 196 m off the planned legs.
 
 The baseline corpus and the ship snapshot are **synthetic** until real AIS is
 dropped in (below) — these are results about the method.
@@ -128,6 +136,29 @@ Types can be ignored with the tick-boxes on the *Ship snapshot* card.
 | Port approaches & fairways | 0.20 NM | 0.50 NM |
 | Berthing basins & narrow water | 0.05 NM | 0.22 NM |
 
+## How the ship turns
+
+The search returns straight legs with sharp corners; a ship cannot turn on the
+spot. `sailing.py` turns the legs into the track the ship would steer, the way
+a passage plan is drawn on an ECDIS - straight legs joined by circular arcs,
+one turn radius per waypoint - and **every metric is taken on that track**:
+
+1. **Straighten** - small lattice jogs (< 150 m, where the straight line is
+   legal) are steered straight through.
+2. **Turn radius per waypoint** - 2.5 × LOA where the water allows (735 m
+   for a Panamax, ~29°/min at 12 kn); smaller where the legs are too short or
+   the arc would cut into land, shallow water, the shore band, a ship's hard
+   CPA or the wrong way down a TSS lane.
+3. **Limits** - never below 1.5 × LOA at sea (about hard-over), or 1.0 × LOA
+   in the 3 NM next to a terminal (pilotage with tugs). A corner that needs
+   less closes the water round it and the route is **searched again** until
+   it can be sailed.
+
+The ship's head in the 3D view adds the drift angle (bow inside the turn,
+up to 5°) and rudder lag, so the ship eases into and out of each turn.
+`/api/route.csv` and the app's waypoint download give the passage plan:
+waypoints plus the turn radius used at each.
+
 ## The three routes
 
 All three obey the same **hard limits** — land; depth ≥ draught + UKC (3.5 m in
@@ -142,7 +173,7 @@ band transit). They differ in how hard they avoid a ship's **target** CPA:
 | Safest | 3 × (depth of incursion)² | 8 NM |
 
 "Ships met" = distinct stationary ships whose envelope the route passes inside
-the target CPA of the zone. Metrics are measured on the smoothed track, not the
+the target CPA of the zone. Metrics are measured on the sailed track (with its turns), not the
 grid.
 
 ## The app
@@ -186,7 +217,7 @@ shore, not good enough to find shoals. To use real depths:
 | `python scripts/capture_ais_snapshot.py` | live AIS snapshot → `data/ais/latest.csv` |
 | `python scripts/run_pipeline.py --out outputs [--snapshot ais:latest.csv] [--voyages real.csv]` | all three scope items, every table |
 | `python scripts/make_figures.py` | F1–F4 for the report |
-| `python -m pytest tests -q` | 31 tests |
+| `python -m pytest tests -q` | 51 tests |
 | `python scripts/export_web_data.py` | rebuild `web_static/data.json` for the in-browser version |
 
 `python scripts/export_3d_world.py --osm <singapore-driving>/public/data` rebuilds
@@ -228,13 +259,14 @@ src/saferoute/
   obstacles.py    ship snapshots: AIS loaders, aisstream parsing, synthetic, obstacle field
   network.py      board + ships -> directed graph; smoothing
   algorithms.py   Dijkstra, A*, weighted A*, alternatives
-  routing.py      plan a route, measure its safety
+  sailing.py      turn radii per waypoint: the track the ship actually sails
+  routing.py      plan a route, sail it, measure its safety
   ais.py          historical voyages (synthetic baseline / real loader)
   evaluation.py   paired baseline validation
   cache.py serve.py viz.py
   data/sg_land.geojson   OSM land polygons for the study area
   web/            index.html app.js map.js ship3d.js style.css vendor/
 scripts/          capture_ais_snapshot.py run_pipeline.py make_figures.py
-tests/            31 tests
+tests/            51 tests
 data/ais/         real snapshots go here      data/bathymetry/   GEBCO goes here
 ```

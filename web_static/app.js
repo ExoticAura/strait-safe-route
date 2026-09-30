@@ -147,11 +147,30 @@ function nearestShips(lat, lon, n = 6) {
             cls: hull < 0.2 ? "bad" : hull < 0.5 ? "warn" : ""};
   }).filter(o => !S.ignored.has(o.s.ship_type)).sort((a, b) => a.hull_nm - b.hull_nm).slice(0, n);
 }
+/* ---- the ship along the route ----
+   The engine returns the SAILED track (engine.js sailLegs): the planned legs
+   joined by turning arcs, sampled every 10 m with the ship's head (course plus
+   drift angle) and its rate of turn after rudder lag. The 3D view and the
+   chart marker both sail exactly that track, which is also the track every
+   safety number was measured on. */
+function trackPoint(tr, f) {
+  const target = Math.max(0, Math.min(1, f)) * tr.length_m, d = tr.d;
+  let lo = 0, hi = d.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (d[m] <= target) lo = m; else hi = m; }
+  const t = hi > lo ? Math.max(0, Math.min(1, (target - d[lo]) / ((d[hi] - d[lo]) || 1e-9))) : 0;
+  const lerp = (a, b) => a + (b - a) * t;
+  let dp = tr.psi[hi] - tr.psi[lo]; dp = Math.atan2(Math.sin(dp), Math.cos(dp));
+  return {lat: lerp(tr.lat[lo], tr.lat[hi]), lon: lerp(tr.lon[lo], tr.lon[hi]),
+          heading: ((tr.psi[lo] + dp * t) * 180 / Math.PI + 360) % 360,
+          turn: lerp(tr.kf[lo], tr.kf[hi]),        // rate of turn per metre, + = to starboard
+          nm: target / NM, total: tr.length_m / NM};
+}
 function ownState() {
   const p = selectedPlan();
   if (!p) return null;
-  const pt = CM.pointAlong(p.coords, S.frac);
-  return {p, pt, near: nearestShips(pt.lat, pt.lon, 14), vessel: vesselObj()};
+  const vessel = vesselObj();
+  const pt = p.track ? trackPoint(p.track, S.frac) : CM.pointAlong(p.coords, S.frac);
+  return {p, pt, near: nearestShips(pt.lat, pt.lon, 14), vessel};
 }
 let lastMapPaint = 0;
 function updateOwn(fromPlay) {
@@ -171,7 +190,7 @@ function updateOwn(fromPlay) {
     // Singapore local time (UTC+8) for the fixed presets
     const TOD = {day: 2, dawn: 23, dusk: 11.17, night: 15};
     const utcHour = S.tod === "now" ? d.getUTCHours() + d.getUTCMinutes() / 60 : TOD[S.tod];
-    SHIP.setParams({vessel: st.vessel, sog: S.meta.planning_speed_kn, heading: st.pt.heading,
+    SHIP.setParams({vessel: st.vessel, sog: S.meta.planning_speed_kn, heading: st.pt.heading, turn: st.pt.turn,
       lat: st.pt.lat, lon: st.pt.lon, utcHour, playing: !!fromPlay,
       nearest: st.near.filter(o => o.centre_nm < 3).map(o => ({id: o.s.id, hull_nm: o.hull_nm, cls: o.cls,
         centre_m: o.centre_nm * NM, loa_m: o.s.loa_m, ship_type: o.s.ship_type}))});
@@ -315,18 +334,25 @@ function renderSide() {
   f("minshore").textContent = nmTxt(m.min_shore_nm);
   f("minukc").textContent = fmt(m.min_ukc_m, 1) + " m";
   f("legs").textContent = `${m.legs} · ${Math.round(m.max_turn_deg)}°`;
+  const L = vesselObj().loa_m;
+  f("turn").textContent = m.min_turn_radius_m
+    ? `${fmt(m.min_turn_radius_m, 0)} m (${fmt(m.min_turn_radius_m / L, 1)} L) · ${fmt(m.max_rot_deg_min, 0)}°/min`
+    : "no turns";
   f("detour").textContent = "+" + fmt(m.detour_pct, 1) + "%";
   f("feasnote").innerHTML = m.feasible
-    ? `Clear of land, of water shallower than draught + UKC, and of every ship&rsquo;s hard exclusion zone.`
-    : `<b style="color:var(--bad)">Check:</b> ${m.hard_breaches} hard CPA breaches, ${fmt(m.shallow_nm, 2)} NM shallow.`;
+    ? `Measured on the track the ship actually sails (turns at 2.5 ship lengths where the water allows, never under 1.5 L at sea or 1 L under pilotage). Clear of land, of water shallower than draught + UKC, and of every ship&rsquo;s hard exclusion zone.`
+    : `<b style="color:var(--bad)">Check:</b> ${m.hard_breaches} hard CPA breaches, ${fmt(m.shallow_nm, 2)} NM shallow${m.turn_ok === false ? `, ${m.tight_turns} turn(s) tighter than the ship can make` : ""}.`;
   f("csv").onclick = async e => {
     e.preventDefault();
     let cum = 0;
-    const lines = ["waypoint,lat,lon,leg_nm,course_deg,cumulative_nm"];
-    p.coords.forEach((c, i) => {
-      if (!i) { lines.push(`0,${c[0].toFixed(6)},${c[1].toFixed(6)},,,0.000`); return; }
-      const a = p.coords[i - 1], leg = ENG.hav(a[0], a[1], c[0], c[1]); cum += leg;
-      lines.push(`${i},${c[0].toFixed(6)},${c[1].toFixed(6)},${leg.toFixed(3)},${ENG.initialBearing(a[0], a[1], c[0], c[1]).toFixed(1)},${cum.toFixed(3)}`);
+    // the passage plan: waypoints and the turn radius used at each
+    const lines = ["waypoint,lat,lon,leg_nm,course_deg,cumulative_nm,turn_radius_m"];
+    const W = p.waypoints || p.coords, RR = p.turn_radii || [];
+    W.forEach((c, i) => {
+      const rr = RR[i] == null ? "" : Math.round(RR[i]);
+      if (!i) { lines.push(`0,${c[0].toFixed(6)},${c[1].toFixed(6)},,,0.000,${rr}`); return; }
+      const a = W[i - 1], leg = ENG.hav(a[0], a[1], c[0], c[1]); cum += leg;
+      lines.push(`${i},${c[0].toFixed(6)},${c[1].toFixed(6)},${leg.toFixed(3)},${ENG.initialBearing(a[0], a[1], c[0], c[1]).toFixed(1)},${cum.toFixed(3)},${rr}`);
     });
     const txt = lines.join("\n");
     try { await navigator.clipboard.writeText(txt); f("csv").textContent = `Copied ${p.coords.length} waypoints as CSV`; }

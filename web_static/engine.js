@@ -293,7 +293,7 @@
         const yy = y + dy, xx = x + dx;
         if (yy < 0 || yy >= g.ny || xx < 0 || xx >= nx) continue;
         const v = yy * nx + xx;
-        if (!net.nav[v] || !knightClear(net.nav, nx, g.ny, y, x, dy, dx)) continue;
+        if (!net.nav[v] || !knightClear(net.knightNav || net.nav, nx, g.ny, y, x, dy, dx)) continue;
         const [c] = edgeCost(net, u, v, y, x, yy, xx);
         if (!isFinite(c)) continue;
         relaxed++;
@@ -371,6 +371,157 @@
       out.push(coords[j]); i = j;
     }
     return out;
+  }
+
+  // -------------------------------------------------------------- sailing
+  // Port of sailing.py: the planned legs sailed as a ship turns - straight
+  // legs joined by circular arcs, one turn radius per waypoint (2.5 L where
+  // the water allows; at least 1.5 L at sea, 1.0 L under pilotage with tugs
+  // in the 3 NM next to a terminal). All metrics are taken on this track.
+  const TURN = {radius_loa: 2.5, min_radius_loa: 1.5, tug_radius_loa: 1.0, pilotage_nm: 3.0, shrink: .85,
+                straighten_m: 150, drift_deg: 5, drift_max_deg: 8, lag_loa: .4, step_m: 10,
+                end_slack_nm: .25, gateway_free_nm: 1.0};
+  const KYM = 110574;
+  function frame(lat0, lon0) {
+    const kx = 111320 * Math.cos(rad(lat0));
+    return {lat0, lon0, kx, xy: pts => pts.map(([la, lo]) => [(lo - lon0) * kx, (la - lat0) * KYM]),
+            ll: (x, y) => [lat0 + y / KYM, lon0 + x / kx]};
+  }
+  function offSeg(p, a, b) {
+    const vx = b[0] - a[0], vy = b[1] - a[1], l2 = vx * vx + vy * vy || 1e-9;
+    const t = clip(((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / l2, 0, 1);
+    return Math.hypot(a[0] + vx * t - p[0], a[1] + vy * t - p[1]);
+  }
+  function straighten(net, legs) {
+    if (legs.length < 3) return legs.slice();
+    const fr = frame(legs[0][0], legs[0][1]), P = fr.xy(legs);
+    const keep = [0];
+    for (let i = 1; i < legs.length - 1; i++) {
+      const a = keep[keep.length - 1], j = i + 1;
+      let near = true;
+      for (let m = a + 1; m < j; m++) if (offSeg(P[m], P[a], P[j]) >= TURN.straighten_m) { near = false; break; }
+      if (near && segmentCost(net, legs[a], legs[j])[2]) continue;      // legs[i] dropped
+      keep.push(i);
+    }
+    keep.push(legs.length - 1);
+    return keep.map(k => legs[k]);
+  }
+  function legGeometry(P) {
+    const u = [], L = [], th = [0];
+    for (let i = 1; i < P.length; i++) {
+      const dx = P[i][0] - P[i - 1][0], dy = P[i][1] - P[i - 1][1], d = Math.hypot(dx, dy) || 1e-9;
+      u.push([dx / d, dy / d]); L.push(d);
+    }
+    for (let i = 1; i < P.length - 1; i++) {
+      const a1 = Math.atan2(u[i - 1][0], u[i - 1][1]), a2 = Math.atan2(u[i][0], u[i][1]);
+      th.push(Math.atan2(Math.sin(a2 - a1), Math.cos(a2 - a1)));        // + = to starboard
+    }
+    th.push(0);
+    return {u, L, th};
+  }
+  function fitRadii(L, th, want) {
+    const n = th.length, tan = th.map(t => Math.tan(Math.abs(t) / 2));
+    const t = want.map((w, i) => w * tan[i]);
+    for (let r = 0; r < 3; r++)
+      for (let j = 0; j < n - 1; j++) {
+        const need = t[j] + t[j + 1];
+        if (need > L[j]) { const f = L[j] / need; t[j] *= f; t[j + 1] *= f; }
+      }
+    return t.map((x, i) => tan[i] > 1e-9 ? x / tan[i] : want[i]);
+  }
+  function arcPts(P, u, th, i, R, ds) {
+    const t = R * Math.tan(Math.abs(th[i]) / 2);
+    const ax = P[i][0] - u[i - 1][0] * t, ay = P[i][1] - u[i - 1][1] * t, sgn = th[i] > 0 ? 1 : -1;
+    const cx = ax + u[i - 1][1] * sgn * R, cy = ay - u[i - 1][0] * sgn * R;
+    const a0 = Math.atan2(ax - cx, ay - cy), c0 = Math.atan2(u[i - 1][0], u[i - 1][1]);
+    const n = Math.max(2, Math.ceil(Math.abs(th[i]) * R / ds) + 1), out = [];
+    for (let k = 0; k < n; k++) {
+      const f = k / (n - 1), a = a0 + th[i] * f;
+      out.push([cx + R * Math.sin(a), cy + R * Math.cos(a), c0 + th[i] * f]);
+    }
+    return out;
+  }
+  function toleranceMask(net, legs) {
+    const g = net.g, m = new Uint8Array(g.n);
+    densify(legs, .25 * Math.min(g.dyNm, g.dxNm)).forEach(p => { const [y, x] = g.toIndex(p[0], p[1]); m[y * g.nx + x] = 1; });
+    return m;
+  }
+  function arcOk(net, fr, pts, tol) {
+    const g = net.g, cIn = pts[0][2], cOut = pts[pts.length - 1][2];
+    const rule = (k, c) => tssPenalty(g.zone[k], g.zone[k], g.head[k], g.head[k], (deg(c) + 360) % 360, net.cfg)[1];
+    for (const [x, y, c] of pts) {
+      const [la, lo] = fr.ll(x, y), [iy, ix] = g.toIndex(la, lo), k = iy * g.nx + ix;
+      if (!net.nav[k] && !tol[k]) return false;
+      // Rule 10 only where the planned legs themselves obey it there
+      if (!rule(k, c) && rule(k, cIn) && rule(k, cOut)) return false;
+    }
+    return true;
+  }
+  function sailLegs(net, legsIn, pilotage = [false, false]) {
+    const Ls = net.vessel.loa_m;
+    const legs = straighten(net, legsIn);
+    const fr = frame(legs[0][0], legs[0][1]), P = fr.xy(legs);
+    const {u, L, th} = legGeometry(P), n = P.length;
+    const cum = [0]; L.forEach(d => cum.push(cum[cum.length - 1] + d));
+    const total = cum[n - 1], tol = toleranceMask(net, legs);
+    const pz = TURN.pilotage_nm * M_PER_NM, slack = TURN.end_slack_nm * M_PER_NM, gate = TURN.gateway_free_nm * M_PER_NM;
+    const floor = cum.map(c => ((pilotage[0] && c <= pz) || (pilotage[1] && total - c <= pz) ? TURN.tug_radius_loa : TURN.min_radius_loa) * Ls);
+    const Rp = TURN.radius_loa * Ls;
+    const R = fitRadii(L, th, new Array(n).fill(Rp));
+    const tooTight = [];
+    for (let i = 1; i < n - 1; i++) {
+      if (Math.abs(th[i]) < 1e-4) continue;
+      let r = R[i];
+      const exempt = cum[i] < slack || total - cum[i] < slack;
+      while (!exempt && r >= 5 && !arcOk(net, fr, arcPts(P, u, th, i, r, TURN.step_m), tol)) r *= TURN.shrink;
+      R[i] = r;
+      const atGate = (!pilotage[0] && cum[i] < gate) || (!pilotage[1] && total - cum[i] < gate);
+      if (r < floor[i] - 1e-6 && !atGate) tooTight.push(i);
+    }
+    // straight runs joined by arcs, every step_m
+    const ds = TURN.step_m;
+    const tIn = th.map((t, i) => i > 0 && i < n - 1 && Math.abs(t) >= 1e-4 ? R[i] * Math.tan(Math.abs(t) / 2) : 0);
+    const xs = [], ys = [], chi = [], kap = [];
+    for (let j = 0; j < n - 1; j++) {
+      const s0 = tIn[j], s1 = L[j] - tIn[j + 1], c = Math.atan2(u[j][0], u[j][1]);
+      const m = Math.max(1, Math.ceil(Math.max(s1 - s0, 0) / ds));
+      for (let k = 0; k < m; k++) {
+        const s = s0 + (s1 - s0) * k / m;
+        xs.push(P[j][0] + u[j][0] * s); ys.push(P[j][1] + u[j][1] * s); chi.push(c); kap.push(0);
+      }
+      const i = j + 1;
+      if (i < n - 1 && tIn[i] > 0) {
+        const kk = (th[i] > 0 ? 1 : -1) / R[i], pts = arcPts(P, u, th, i, R[i], ds);
+        for (let q = 0; q < pts.length - 1; q++) { xs.push(pts[q][0]); ys.push(pts[q][1]); chi.push(pts[q][2]); kap.push(kk); }
+      }
+    }
+    xs.push(P[n - 1][0]); ys.push(P[n - 1][1]); chi.push(Math.atan2(u[n - 2][0], u[n - 2][1])); kap.push(0);
+    const N = xs.length, d = new Float64Array(N), kf = new Float64Array(N), psi = new Float64Array(N);
+    const lat = new Float64Array(N), lon = new Float64Array(N);
+    const lag = TURN.lag_loa * Ls, dmax = rad(TURN.drift_max_deg);
+    for (let k = 0; k < N; k++) {
+      if (k) {
+        d[k] = d[k - 1] + Math.hypot(xs[k] - xs[k - 1], ys[k] - ys[k - 1]);
+        kf[k] = kf[k - 1] + (kap[k] - kf[k - 1]) * Math.min(1, (d[k] - d[k - 1]) / lag);
+      }
+      // the ship's head: course plus drift (bow inside the turn), rudder lag on the rate of turn
+      psi[k] = chi[k] + clip(rad(TURN.drift_deg) * Rp * kf[k], -dmax, dmax);
+      [lat[k], lon[k]] = fr.ll(xs[k], ys[k]);
+    }
+    // turning figures and the largest offset from the planned legs
+    let xt = 0;
+    for (let k = 0; k < N; k++) {
+      let b = Infinity;
+      for (let i = 1; i < n; i++) b = Math.min(b, offSeg([xs[k], ys[k]], P[i - 1], P[i]));
+      if (b > xt) xt = b;
+    }
+    let rmin = Infinity;
+    for (let i = 1; i < n - 1; i++) if (Math.abs(th[i]) >= 1e-4) rmin = Math.min(rmin, R[i]);
+    const mPerMin = 12 * M_PER_NM / 60;
+    return {legs, radius: R, turn: th, tooTight, d, lat, lon, psi, kf, length_m: d[N - 1],
+            summary: {waypoints: n, min_turn_radius_m: isFinite(rmin) ? rmin : null,
+                      max_rot_deg_min: isFinite(rmin) ? deg(1 / rmin) * mPerMin : 0,
+                      max_xtrack_m: xt, tight_turns: tooTight.length}};
   }
 
   // -------------------------------------------------------------- metrics
@@ -486,17 +637,67 @@
   function nodeAt(net, la, lo) { const s = nearestNavigable(net.g, la, lo, net.nav); return s[0] * net.g.nx + s[1]; }
   function coordsOf(net, path) { const nx = net.g.nx; return path.map(k => [net.g.lats[(k / nx) | 0], net.g.lons[k % nx]]); }
 
-  function planRoute(net, origin, dest, ships, swing, algorithm = "astar") {
-    const a = pointOf(net.data, origin), b = pointOf(net.data, dest);
+  function planRoute(net, origin, dest, ships, swing, algorithm = "astar", maxPushes = 5) {
+    // search -> string-pull -> sail (turn radii) -> measure the sailed track.
+    // A waypoint the ship cannot turn at pushes the route off the obstacle:
+    // the water round it is closed and the search runs again.
+    const g = net.g, a = pointOf(net.data, origin), b = pointOf(net.data, dest);
     const src = nodeAt(net, a[0], a[1]), dst = nodeAt(net, b[0], b[1]);
-    const r = search(net, src, dst, algorithm !== "dijkstra");
-    if (!r.found) return null;
-    const raw = coordsOf(net, r.path);
-    const sm = smooth(net, raw);
-    const [m, enc] = trackMetrics(net, sm, ships, swing);
+    const terminals = (net.data.meta.terminals || ["SGTUA", "SGJUR", "SGPPT", "SGKEP"]);
+    const pilot = [origin, dest].map(x => typeof x === "string" && terminals.includes(x));
+    const blocked = new Uint8Array(g.n), keep = new Uint8Array(g.n);
+    for (const k of [src, dst]) {
+      const y = (k / g.nx) | 0, x = k % g.nx;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const yy = y + dy, xx = x + dx;
+        if (yy >= 0 && yy < g.ny && xx >= 0 && xx < g.nx) keep[yy * g.nx + xx] = 1;
+      }
+    }
+    let best = null, anyBlocked = false;
+    for (let push = 0; push <= maxPushes; push++) {
+      let netA = net;
+      if (anyBlocked) {
+        const nav = new Uint8Array(g.n);
+        for (let k = 0; k < g.n; k++) nav[k] = net.nav[k] && !blocked[k] ? 1 : 0;
+        // as in routing.py: closed cells cannot be entered; the lattice's
+        // corner-cutting rules still use the unmodified board
+        netA = Object.assign({}, net, {nav, knightNav: net.nav});
+      }
+      const r = search(netA, src, dst, algorithm !== "dijkstra");
+      if (!r.found) break;
+      const raw = coordsOf(net, r.path), sm = smooth(netA, raw);
+      const tr = sailLegs(net, sm, pilot);
+      if (!best || tr.tooTight.length < best.tr.tooTight.length) best = {r, raw, tr, push};
+      if (!tr.tooTight.length) break;
+      for (const i of tr.tooTight) {
+        const [y, x] = g.toIndex(tr.legs[i][0], tr.legs[i][1]);
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const yy = y + dy, xx = x + dx;
+          if (yy >= 0 && yy < g.ny && xx >= 0 && xx < g.nx && !keep[yy * g.nx + xx]) { blocked[yy * g.nx + xx] = 1; anyBlocked = true; }
+        }
+      }
+    }
+    if (!best) return null;
+    const {r, raw, tr, push} = best;
+    const coords = [];
+    for (let k = 0; k < tr.lat.length; k += 3) coords.push([tr.lat[k], tr.lon[k]]);
+    const last = tr.lat.length - 1;
+    if (last % 3) coords.push([tr.lat[last], tr.lon[last]]);
+    const [m, enc] = trackMetrics(net, coords, ships, swing);
+    Object.assign(m, tr.summary);
+    const ta = turnAngles(tr.legs);
+    m.max_turn_deg = ta.length ? Math.max(...ta) : 0;
+    m.legs = tr.legs.length - 1;
+    m.turn_ok = tr.tooTight.length === 0;
+    m.route_pushes = push;
+    m.feasible = m.feasible && m.turn_ok;
     let gd = 0; for (let i = 1; i < raw.length; i++) gd += hav(raw[i - 1][0], raw[i - 1][1], raw[i][0], raw[i][1]);
-    m.grid_distance_nm = gd; m.cost_effective_nm = r.cost;
-    return {label: net.cfg.mode, mode: net.cfg.mode, metrics: m, coords: sm, encounters: enc,
+    let pd = 0; for (let i = 1; i < tr.legs.length; i++) pd += hav(tr.legs[i - 1][0], tr.legs[i - 1][1], tr.legs[i][0], tr.legs[i][1]);
+    m.grid_distance_nm = gd; m.planned_distance_nm = pd; m.cost_effective_nm = r.cost;
+    const radii = tr.legs.map((_, i) => i > 0 && i < tr.legs.length - 1 && Math.abs(tr.turn[i]) >= 1e-4 ? tr.radius[i] : null);
+    return {label: net.cfg.mode, mode: net.cfg.mode, metrics: m, coords, encounters: enc,
+            waypoints: tr.legs, turn_radii: radii,
+            track: {d: tr.d, lat: tr.lat, lon: tr.lon, psi: tr.psi, kf: tr.kf, length_m: tr.length_m},
             search: Object.assign({}, r, {path: undefined})};
   }
 
@@ -557,7 +758,7 @@
     return {ships: out, moving};
   }
 
-  const api = {edgeCost, makeGrid, obstacleField, buildNet, search, planRoute, trackMetrics, smooth, envelope,
+  const api = {edgeCost, makeGrid, obstacleField, buildNet, search, planRoute, trackMetrics, smooth, sailLegs, TURN, envelope,
                endpointCheck, nodeAt, shipsFromCsv, hav, initialBearing, MODES, BOARD_LABELS};
   root.SafeRouteEngine = api;
   if (typeof module !== "undefined") module.exports = api;

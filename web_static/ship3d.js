@@ -528,12 +528,15 @@ function foamMaterial(foam) {
   // Additive white, modulated by the foam texture and the per-vertex fade.
   return new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
-    uniforms: {map: {value: foam}, offset: {value: 0}, opacity: {value: .8}},
+    uniforms: {map: {value: foam}, offset: {value: 0}, opacity: {value: .8}, bend: {value: 0}, xs: {value: 0}},
     polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
     vertexShader: `#include <common>
       #include <logdepthbuf_pars_vertex>
-      attribute vec3 color; varying vec2 vUv; varying float vF;
-      void main(){ vUv = uv; vF = color.r; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.);
+      attribute vec3 color; varying vec2 vUv; varying float vF; uniform float bend; uniform float xs;
+      void main(){ vUv = uv; vF = color.r;
+        // in a turn the wake trails round the arc the stern has just sailed
+        vec3 p = position; float d = max(0., xs - p.x); p.z += bend * d * d * .5;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.);
         #include <logdepthbuf_vertex>
       }`,
     fragmentShader: `#include <common>
@@ -557,6 +560,7 @@ function buildWake(H, foam) {
     ww.push(H.B * (.28 + 1.1 * Math.pow(t, .7))); wf.push(Math.pow(1 - t, 1.3));
   }
   const m1 = foamMaterial(foam); mats.push(m1);
+  const setXs = m => { m.uniforms.xs.value = xS; };
   g.add(new THREE.Mesh(ribbon(wash, ww, wf, 60), m1));
   // Kelvin arms: two thin lines diverging at about 19.5 degrees from the stern
   const ang = 19.5 * Math.PI / 180;
@@ -583,6 +587,7 @@ function buildWake(H, foam) {
     g.add(new THREE.Mesh(ribbon(pts, w, f, 25), m));
   }
   g.children.forEach(c => { c.renderOrder = 2; });
+  mats.forEach(setXs);
   return {group: g, mats};
 }
 
@@ -735,7 +740,7 @@ export function createShipView(container) {
     textureWidth: 512, textureHeight: 512, waterNormals: waterNormals(),
     sunDirection: new THREE.Vector3(), sunColor: 0xffffff, waterColor: 0x0b3a52,
     distortionScale: 3.0, fog: false});
-  water.rotation.x = -Math.PI / 2; water.material.uniforms.size.value = 1.6; scene.add(water);
+  water.rotation.x = -Math.PI / 2; water.material.uniforms.size.value = 1.6;   // added to the world below
 
   const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -.0004; sun.shadow.normalBias = .6;
@@ -760,7 +765,7 @@ export function createShipView(container) {
   const foam = foamTex();
 
   let ship = null, wake = null, chain = null, vesselCode = null;
-  let P = {sog: 12, heading: 90, lat: 1.2, lon: 103.8, utcHour: 4, anchored: false};
+  let P = {sog: 12, heading: 90, turn: 0, lat: 1.2, lon: 103.8, utcHour: 4, anchored: false};
   let visible = true, current = "quarter";
   const rings = buildRings(); scene.add(rings);
 
@@ -774,6 +779,9 @@ export function createShipView(container) {
   const KX = 111320 * Math.cos(O.lat * Math.PI / 180), KY = 110574;
   const toLocal = (lat, lon) => [(lon - O.lon) * KX, -(lat - O.lat) * KY];
   const world = new THREE.Group(); scene.add(world);
+  // the sea belongs to the Earth, not to our ship: its wave pattern stays put
+  // and the ship sails across it (in the ship's frame it streamed along with us)
+  world.add(water);
   const shipsG = new THREE.Group(); world.add(shipsG);
   const labelsG = new THREE.Group(); scene.add(labelsG);
   const templates = new Map();          // spec.code -> built ship (shared geometry)
@@ -1146,6 +1154,7 @@ export function createShipView(container) {
   }
 
   const clock = new THREE.Clock();
+  let heel = 0;
   let onScreen = true, last = 0;
   const io = new IntersectionObserver(es => { onScreen = es.some(e => e.isIntersecting); });
   function tick(now) {
@@ -1158,11 +1167,14 @@ export function createShipView(container) {
     const anchored = P.anchored || P.sog < .5;
     const amp = anchored ? .35 : .6;
     ship.root.rotation.z = Math.sin(t * .45) * .004 * amp * 3;      // pitch (about the beam axis)
-    ship.root.rotation.x = Math.sin(t * .31 + 1) * .012 * amp;      // roll
+    // heel outward in a turn (up to ~3 degrees at the tightest turning circle)
+    const turnFrac = clamp((P.turn || 0) * 2.5 * ship.H.L, -1, 1);
+    heel += (-turnFrac * .052 - heel) * Math.min(1, dt * .8);
+    ship.root.rotation.x = Math.sin(t * .31 + 1) * .012 * amp + heel;      // roll
     ship.root.position.y = -ship.H.T + Math.sin(t * .6) * .25 * amp;
     if (!anchored) {
       const off = t * P.sog * .012;
-      wake.mats.forEach(m => { m.uniforms.offset.value = off; });
+      wake.mats.forEach(m => { m.uniforms.offset.value = off; m.uniforms.bend.value = P.turn || 0; });
     }
     controls.update();
     renderer.render(scene, camera);

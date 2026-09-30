@@ -15,7 +15,7 @@ API
                    &modes=shortest,balanced,safest&swing=1&cpa_scale=1&types=
                    &alternatives=1&benchmark=0
          origin/destination may also be "lat,lon"
-    GET  /api/route.csv?...same...&mode=safest          waypoints as CSV
+    GET  /api/route.csv?...same...&mode=safest          waypoints + turn radii as CSV
     POST /api/snapshot?name=my.csv   (body: CSV text)   add an AIS snapshot
     GET  /api/health
 """
@@ -198,6 +198,7 @@ def route_payload(q: Dict[str, str]) -> Dict[str, Any]:
         for p in plans:
             row = dict(label=p.label, mode=p.mode, metrics=p.metrics,
                        coords=viz.round_coords(p.coords, 6),
+                       waypoints=viz.round_coords(p.waypoints, 6), turn_radii=p.turn_radii,
                        encounters=p.encounters, search=p.search)
             out_plans.append(row)
     if not out_plans:
@@ -225,17 +226,19 @@ def route_csv(q: Dict[str, str]) -> bytes:
         raise ValueError(r.get("reason"))
     p = r["plans"][0]
     buf = io.StringIO()
-    buf.write("waypoint,lat,lon,leg_nm,course_deg,cumulative_nm\n")
+    # the passage plan: waypoints, and the turn radius the ship uses at each
+    buf.write("waypoint,lat,lon,leg_nm,course_deg,cumulative_nm,turn_radius_m\n")
     cum = 0.0
-    cs = p["coords"]
+    cs, radii = p["waypoints"], p["turn_radii"]
     for i, (la, lo) in enumerate(cs):
+        rad = "" if radii[i] is None else f"{radii[i]:.0f}"
         if i:
             leg = float(haversine_nm(cs[i - 1][0], cs[i - 1][1], la, lo))
             crs = initial_bearing_deg(cs[i - 1][0], cs[i - 1][1], la, lo)
             cum += leg
-            buf.write(f"{i},{la:.6f},{lo:.6f},{leg:.3f},{crs:.1f},{cum:.3f}\n")
+            buf.write(f"{i},{la:.6f},{lo:.6f},{leg:.3f},{crs:.1f},{cum:.3f},{rad}\n")
         else:
-            buf.write(f"{i},{la:.6f},{lo:.6f},,,0.000\n")
+            buf.write(f"{i},{la:.6f},{lo:.6f},,,0.000,{rad}\n")
     return buf.getvalue().encode()
 
 

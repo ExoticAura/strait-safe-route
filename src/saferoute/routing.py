@@ -1,13 +1,14 @@
 """Plan a route and measure how safe it actually is.
 
 `plan_route` runs the search on a built network, string-pulls the lattice path
-into straight legs, and then measures the continuous track against the same
-physical world - every stationary ship, the shore and the depth - so the
-numbers reported are properties of the track a ship would steer, not of the
-grid.
+into straight legs, sails those legs with a turning model (sailing.py), and
+then measures the sailed track against the same physical world - every
+stationary ship, the shore and the depth - so the numbers reported are
+properties of the track a ship would actually steer, not of the grid.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 import time
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from .algorithms import SearchResult, astar, dijkstra, k_shortest_paths
 from .geo import M_PER_NM, densify, haversine_nm, initial_bearing_deg, path_length_nm, turn_angles_deg
 from .network import NavNetwork, smooth_path
 from .obstacles import Snapshot
+from .sailing import TurnModel, sail, track_summary
 
 
 @dataclass
@@ -30,6 +32,9 @@ class RoutePlan:
     metrics: Dict
     search: Optional[Dict] = None
     encounters: List[Dict] = field(default_factory=list)
+    waypoints: List[Tuple[float, float]] = field(default_factory=list)   # the planned legs
+    heading: List[float] = field(default_factory=list)                   # ship's head along coords
+    turn_radii: List[Optional[float]] = field(default_factory=list)      # per waypoint, m
 
     def as_row(self) -> Dict:
         d = dict(label=self.label, mode=self.mode, **self.metrics)
@@ -135,33 +140,100 @@ def endpoints(net: NavNetwork, origin, destination):
     return net.node_at(*a), net.node_at(*b), a, b
 
 
+def _pushed_off(net: NavNetwork, base_nav: np.ndarray, blocked: np.ndarray) -> NavNetwork:
+    """The same network with `blocked` cells closed (used to push a route off
+    an obstacle its turn would cut into)."""
+    nav = base_nav & ~blocked
+    node_blocked = np.zeros(net.n_nodes, dtype=bool)
+    ids = net.node_of_cell[blocked]
+    node_blocked[ids[ids >= 0]] = True
+    cost = np.where(node_blocked[net.indices], math.inf, net.cost)
+    return dataclasses.replace(net, navigable=nav, cost=cost)
+
+
+def _search(net, src, dst, algorithm, alternatives):
+    if alternatives > 1:
+        return k_shortest_paths(net, src, dst, k=alternatives)
+    return [dijkstra(net, src, dst) if algorithm == "dijkstra" else astar(net, src, dst)]
+
+
 def plan_route(net: NavNetwork, origin, destination, snap: Optional[Snapshot],
                algorithm: str = "astar", label: Optional[str] = None,
-               alternatives: int = 1) -> List[RoutePlan]:
+               alternatives: int = 1, turn_model: Optional[TurnModel] = None,
+               max_pushes: int = 5) -> List[RoutePlan]:
+    """Search, string-pull, sail, measure.
+
+    The metrics describe the SAILED track (see sailing.py): the route a ship
+    of this length actually steers, turning at a realistic radius, not the
+    polyline of the search. If a turn would cut into a hard limit it is first
+    tightened; if that is not enough the route is pushed off the obstacle and
+    searched again (up to `max_pushes` times).
+    """
+    model = turn_model or TurnModel()
     src, dst, a, b = endpoints(net, origin, destination)
+    g = net.grid
+    base_nav = net.navigable
+    blocked = np.zeros(g.shape, dtype=bool)
+    keep = np.zeros(g.shape, dtype=bool)               # never close the ends
+    for node in (src, dst):
+        y, x = int(net.node_iy[node]), int(net.node_ix[node])
+        keep[max(0, y - 2):y + 3, max(0, x - 2):x + 3] = True
+    # which ends are terminals (sailed under pilotage) rather than strait gateways
+    pilot = tuple(isinstance(x, str) and x in SA.TERMINALS for x in (origin, destination))
     t0 = time.perf_counter()
-    if alternatives > 1:
-        results = k_shortest_paths(net, src, dst, k=alternatives)
-    else:
-        results = [dijkstra(net, src, dst) if algorithm == "dijkstra" else astar(net, src, dst)]
+    best = None
+    for push in range(max_pushes + 1):
+        net_a = net if not blocked.any() else _pushed_off(net, base_nav, blocked)
+        results = [r for r in _search(net_a, src, dst, algorithm, alternatives) if r.found]
+        if not results:
+            break
+        sailed = []
+        total_bad = 0
+        for r in results:
+            sm = smooth_path(net_a, net.coords(r.path))
+            tr = sail(net, sm, model, pilotage=pilot)
+            sailed.append((r, tr))
+            total_bad += len(tr["too_tight"])
+        if best is None or total_bad < best[1]:
+            best = (sailed, total_bad, push)
+        if total_bad == 0:
+            break
+        # close the water round each waypoint the ship cannot turn at, so the
+        # next search swings wider there
+        rad = 1
+        for _, tr in sailed:
+            for i in tr["too_tight"]:
+                y, x = g.to_index(*tr["legs"][i])
+                blocked[max(0, y - rad):y + rad + 1, max(0, x - rad):x + rad + 1] = True
+        blocked &= ~keep
     search_s = time.perf_counter() - t0
     plans = []
-    for i, r in enumerate(results):
-        if not r.found:
-            continue
-        raw = net.coords(r.path)
-        # The request point may sit a cell or two off the snapped node; keep
-        # the track starting and ending on the node the search actually used.
-        sm = smooth_path(net, raw)
-        met, enc = track_metrics(net, sm, snap)
+    if best is None:
+        return plans
+    sailed, _, pushes = best
+    for i, (r, tr) in enumerate(sailed):
+        coords, turn = track_summary(tr, SA.PLANNING_SPEED_KN)
+        met, enc = track_metrics(net, coords, snap)
+        met.update(turn)
+        met["max_turn_deg"] = max(turn_angles_deg(tr["legs"]), default=0.0)
+        met["legs"] = max(len(tr["legs"]) - 1, 0)
+        met["turn_ok"] = not tr["too_tight"]
+        met["route_pushes"] = int(pushes)
+        met["feasible"] = bool(met["feasible"] and met["turn_ok"])
         met["grid_distance_nm"] = net.path_cost(r.path)[1]
+        met["planned_distance_nm"] = path_length_nm(tr["legs"])
         met["cost_effective_nm"] = r.cost
         lab = label or net.cfg.mode
         if i > 0:
             lab = f"{lab} - alternative {chr(64 + i)}"
-        plans.append(RoutePlan(lab, net.cfg.mode, sm, met,
+        plans.append(RoutePlan(lab, net.cfg.mode, coords, met,
                                search=dict(r.as_row(), search_s=search_s),
-                               encounters=enc))
+                               encounters=enc, waypoints=[tuple(c) for c in tr["legs"]],
+                               heading=[round(float(math.degrees(h)) % 360.0, 2)
+                                        for h in tr["psi"][::3]],
+                               turn_radii=[round(float(tr["radius"][k]), 1)
+                                           if 0 < k < len(tr["legs"]) - 1 and abs(tr["turn"][k]) >= 1e-4
+                                           else None for k in range(len(tr["legs"]))]))
     return plans
 
 
