@@ -212,7 +212,8 @@ function buildHull(H, colours) {
     }));
     for (let i = 0; i < NS; i++) for (let j = 0; j < W - 1; j++) {
       const a = base + i * W + j, b = a + W, c = b + 1, d = a + 1;
-      if (side > 0) idx.push(a, d, b, d, c, b); else idx.push(a, b, d, d, b, c);
+      // outward-facing winding (starboard +z, port -z) so lighting and culling are right
+      if (side > 0) idx.push(a, b, d, d, b, c); else idx.push(a, d, b, d, c, b);
     }
   }
   const g = new THREE.BufferGeometry();
@@ -237,11 +238,11 @@ function buildHull(H, colours) {
   dg.setAttribute("position", new THREE.Float32BufferAttribute(dp, 3));
   dg.setIndex(di); dg.computeVertexNormals();
 
-  const mat = new THREE.MeshStandardMaterial({vertexColors: true, roughness: .55, metalness: .25});
+  const mat = new THREE.MeshStandardMaterial({vertexColors: true, roughness: .55, metalness: .25, side: THREE.DoubleSide});
   const grp = new THREE.Group();
   const hull = new THREE.Mesh(g, mat); hull.castShadow = hull.receiveShadow = true;
   const tr = new THREE.Mesh(tg, mat.clone()); tr.material.side = THREE.DoubleSide;
-  const deck = new THREE.Mesh(dg, new THREE.MeshStandardMaterial({color: colours.deck, roughness: .85}));
+  const deck = new THREE.Mesh(dg, new THREE.MeshStandardMaterial({color: colours.deck, roughness: .85, side: THREE.DoubleSide}));
   deck.receiveShadow = true;
   grp.add(hull, tr, deck);
 
@@ -512,7 +513,7 @@ function ribbon(pts, widths, fade, uvLen) {
     const nx = i < pts.length - 1 ? pts[i + 1][0] - q[0] : q[0] - pts[i - 1][0];
     const nz = i < pts.length - 1 ? pts[i + 1][1] - q[1] : q[1] - pts[i - 1][1];
     const l = Math.hypot(nx, nz) || 1, ox = -nz / l * widths[i], oz = nx / l * widths[i];
-    p.push(q[0] - ox, .07, q[1] - oz, q[0] + ox, .07, q[1] + oz);
+    p.push(q[0] - ox, .15, q[1] - oz, q[0] + ox, .15, q[1] + oz);
     uv.push(0, acc / uvLen, 1, acc / uvLen);
     c.push(fade[i], fade[i], fade[i], fade[i], fade[i], fade[i]);
   });
@@ -528,11 +529,20 @@ function foamMaterial(foam) {
   return new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
     uniforms: {map: {value: foam}, offset: {value: 0}, opacity: {value: .8}},
-    vertexShader: `attribute vec3 color; varying vec2 vUv; varying float vF;
-      void main(){ vUv = uv; vF = color.r; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
-    fragmentShader: `uniform sampler2D map; uniform float offset; uniform float opacity;
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    vertexShader: `#include <common>
+      #include <logdepthbuf_pars_vertex>
+      attribute vec3 color; varying vec2 vUv; varying float vF;
+      void main(){ vUv = uv; vF = color.r; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: `#include <common>
+      #include <logdepthbuf_pars_fragment>
+      uniform sampler2D map; uniform float offset; uniform float opacity;
       varying vec2 vUv; varying float vF;
-      void main(){ float f = texture2D(map, vec2(vUv.x, vUv.y + offset)).g;
+      void main(){
+        #include <logdepthbuf_fragment>
+        float f = texture2D(map, vec2(vUv.x, vUv.y + offset)).g;
         float edge = smoothstep(0., .35, vUv.x) * smoothstep(1., .65, vUv.x);
         gl_FragColor = vec4(vec3(1.), 1.) * f * vF * opacity * (.35 + .65 * edge); }`,
   });
@@ -678,8 +688,8 @@ function buildRings() {
     const r = nm * NM_M, w = Math.max(1.6, r * .006);
     const ring = new THREE.Mesh(new THREE.RingGeometry(r - w, r + w, 160),
       new THREE.MeshBasicMaterial({color: 0xffffff, transparent: true, opacity: .55, side: THREE.DoubleSide,
-                                   depthWrite: false, fog: false}));
-    ring.rotation.x = -Math.PI / 2; ring.position.y = .4; ring.renderOrder = 3; g.add(ring);
+                                   depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4}));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = .8; ring.renderOrder = 3; g.add(ring);
     const sp = textSprite([lab], "#ffffff", "rgba(8,16,24,.5)");
     sp.scale.multiplyScalar(.8); sp.position.set(0, 2, -r); g.add(sp);
   });
@@ -689,7 +699,11 @@ function buildRings() {
 export function createShipView(container) {
   let renderer;
   try {
-    renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: "high-performance"});
+    // logarithmic depth: the scene spans 2 m (the bridge wing) to 100+ km (the
+    // horizon), far beyond a linear depth buffer, which made land, rings and
+    // wake z-fight with the sea
+    renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: "high-performance",
+                                        logarithmicDepthBuffer: true});
   } catch (e) {
     container.innerHTML = '<p class="note" style="padding:12px">3D view needs WebGL, which this browser has turned off.</p>';
     return {setParams() {}, attach() {}, dispose() {}, view() {}};
@@ -778,10 +792,26 @@ export function createShipView(container) {
   }
 
   // ---- land: the same coastline the router uses, as a low slab
+  // Its top is draped with a land-use texture painted from OpenStreetMap
+  // (urban ground, port yards, parks, reservoirs, roads, building footprints).
+  const landTop = new THREE.MeshStandardMaterial({color: 0x7f8f6a, roughness: 1, metalness: 0});
+  function applyLanduse(lu) {
+    if (!lu) return;
+    new THREE.TextureLoader().load(`${basePath}world/${lu.file}`, tex => {
+      // ExtrudeGeometry gives the top face UVs in shape units = metres east/north of O
+      const x0 = (lu.lon0 - O.lon) * KX, y0 = (lu.lat0 - O.lat) * KY;
+      const Wm = (lu.lon1 - lu.lon0) * KX, Hm = (lu.lat1 - lu.lat0) * KY;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      tex.repeat.set(1 / Wm, 1 / Hm); tex.offset.set(-x0 / Wm, -y0 / Hm);
+      landTop.map = tex; landTop.color.set(0xffffff); landTop.needsUpdate = true;
+    });
+  }
   function buildLand(landGeo) {
     // top of the land 4 m above the sea (seawall / reclaimed-land level) with a
     // darker quay face, so the coast reads as standing clear of the water
-    const mat = new THREE.MeshStandardMaterial({color: 0x7f8f6a, roughness: .95, metalness: 0, flatShading: true});
+    const mat = landTop;
     const side = new THREE.MeshStandardMaterial({color: 0x6b6a62, roughness: .9, metalness: 0, flatShading: true});
     fogMat.push(mat, side);
     const shapes = [];
@@ -801,7 +831,8 @@ export function createShipView(container) {
   }
 
   // ---- buildings: OpenStreetMap footprints, loaded by tile around the ship
-  const bMat = new THREE.MeshStandardMaterial({vertexColors: true, roughness: .8, metalness: .05, flatShading: true,
+  const bMat = new THREE.MeshStandardMaterial({vertexColors: true, roughness: .75, metalness: .05, flatShading: true,
+                                               side: THREE.DoubleSide,
                                                emissive: new THREE.Color(0xffc987), emissiveIntensity: 0});
   fogMat.push(bMat);
   function parseTile(buf, i, j) {
@@ -815,11 +846,20 @@ export function createShipView(container) {
         const lo = lon0 + dv.getUint16(o, true) / 1e6, la = lat0 + dv.getUint16(o + 2, true) / 1e6; o += 4;
         ring.push(toLocal(la, lo));
       }
+      // make every footprint wind the same way so the walls face outwards
+      let ar = 0;
+      for (let k = 0; k < n; k++) { const [x1, z1] = ring[k], [x2, z2] = ring[(k + 1) % n]; ar += x1 * z2 - x2 * z1; }
+      if (ar < 0) ring.reverse();
       const base = pos.length / 3;
-      // colour: concrete greys, a little lighter for taller buildings
-      const t = Math.min(h / 120, 1), g0 = .58 + .22 * t + (est ? -.03 : .02);
-      const tint = [g0, g0 * .99, g0 * .96];
-      ring.forEach(([x, z]) => { pos.push(x, LAND_TOP, z); col.push(tint[0] * .8, tint[1] * .8, tint[2] * .8); });
+      // colour: mostly white / off-white render like Singapore's housing blocks,
+      // with some cream, pale grey and (for towers) blue-grey glass
+      const hs = Math.abs(Math.sin(ring[0][0] * 12.9898 + ring[0][1] * 78.233) * 43758.5453) % 1;
+      let tint;
+      if (h > 90 && hs < .45) tint = [.62, .72, .80];
+      else if (hs < .18) tint = [.93, .88, .78];
+      else if (hs < .30) tint = [.78, .79, .80];
+      else { const g0 = .90 + .08 * (hs - .3); tint = [g0, g0, g0 * .98]; }
+      ring.forEach(([x, z]) => { pos.push(x, LAND_TOP, z); col.push(tint[0] * .72, tint[1] * .72, tint[2] * .72); });
       ring.forEach(([x, z]) => { pos.push(x, LAND_TOP + h, z); col.push(...tint); });
       for (let k = 0; k < n; k++) {
         const a0 = base + k, a1 = base + (k + 1) % n, b0 = a0 + n, b1 = a1 + n;
@@ -865,7 +905,7 @@ export function createShipView(container) {
       }
     });
   }
-  const LOAD_M = 5000, DROP_M = 9000;
+  const LOAD_M = 11000, DROP_M = 15000;
 
   // ---- ports: quay cranes and container yards (representative placement)
   function craneGeometry() {
@@ -941,7 +981,7 @@ export function createShipView(container) {
     const halo = new THREE.Mesh(new THREE.RingGeometry(rr, rr + Math.max(4, rr * .08), 48),
       new THREE.MeshBasicMaterial({color: 0xffffff, transparent: true, opacity: .7, side: THREE.DoubleSide,
                                    depthWrite: false, fog: false}));
-    halo.rotation.x = -Math.PI / 2; halo.position.set(x, .6, z); halo.renderOrder = 3; shipsG.add(halo);
+    halo.rotation.x = -Math.PI / 2; halo.position.set(x, 1.0, z); halo.renderOrder = 3; shipsG.add(halo);
     placed.set(n.id, {obj, halo, n, tpl});
   }
   function updateShipsNear() {
@@ -1160,7 +1200,7 @@ export function createShipView(container) {
     setWorld(w) {
       basePath = w.basePath || "";
       if (w.land && !world.userData.land) { buildLand(w.land); world.userData.land = true; }
-      if (w.meta && !worldMeta) { worldMeta = w.meta; buildPorts(w.meta.terminals || []); updateTiles(); }
+      if (w.meta && !worldMeta) { worldMeta = w.meta; buildPorts(w.meta.terminals || []); applyLanduse(w.meta.landuse); updateTiles(); }
       if (w.ships) {
         allShips = w.ships;
         placed.forEach(v => { shipsG.remove(v.obj); shipsG.remove(v.halo); }); placed.clear(); labelKey = "";

@@ -192,6 +192,9 @@ shore, not good enough to find shoals. To use real depths:
 `python scripts/export_3d_world.py --osm <singapore-driving>/public/data` rebuilds
 the 3D buildings (124,883 OSM footprints, ~70 % with estimated heights) and the
 representative quay cranes / container yards for `web_static/world/`.
+`python scripts/export_land_texture.py --osm <same>` then paints the land-use
+texture draped over the land (urban ground, port yards, parks, reservoirs, roads,
+building footprints) as `web_static/world/landuse.jpg`.
 
 `web_static/` is the same app with the engine ported to JavaScript
 (`engine.js`), so it runs with no server at all; its routes and costs match the

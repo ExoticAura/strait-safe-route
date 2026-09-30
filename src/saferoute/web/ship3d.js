@@ -212,7 +212,7 @@ function buildHull(H, colours) {
     }));
     for (let i = 0; i < NS; i++) for (let j = 0; j < W - 1; j++) {
       const a = base + i * W + j, b = a + W, c = b + 1, d = a + 1;
-      if (side > 0) idx.push(a, d, b, d, c, b); else idx.push(a, b, d, d, b, c);
+      if (side > 0) idx.push(a, b, d, d, b, c); else idx.push(a, d, b, d, c, b);   // outward-facing
     }
   }
   const g = new THREE.BufferGeometry();
