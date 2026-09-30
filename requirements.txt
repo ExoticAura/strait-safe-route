@@ -1,0 +1,9 @@
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+matplotlib>=3.7
+pytest>=7.0
+# optional:
+#   websockets   - scripts/capture_ais_snapshot.py (live AIS from aisstream.io)
+#   tifffile     - GEBCO GeoTIFF bathymetry
+#   netCDF4      - GEBCO netCDF bathymetry (Esri ASCII needs nothing extra)

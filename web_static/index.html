@@ -1,0 +1,1115 @@
+<title>Strait Safe Route</title>
+<meta name="description" content="Safest and shortest routes between the Singapore Strait entrances and Singapore terminals, around every stationary ship.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* required styles */
+
+.leaflet-pane,
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-tile-container,
+.leaflet-pane > svg,
+.leaflet-pane > canvas,
+.leaflet-zoom-box,
+.leaflet-image-layer,
+.leaflet-layer {
+	position: absolute;
+	left: 0;
+	top: 0;
+	}
+.leaflet-container {
+	overflow: hidden;
+	}
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+	-webkit-user-select: none;
+	   -moz-user-select: none;
+	        user-select: none;
+	  -webkit-user-drag: none;
+	}
+/* Prevents IE11 from highlighting tiles in blue */
+.leaflet-tile::selection {
+	background: transparent;
+}
+/* Safari renders non-retina tile on retina better with this, but Chrome is worse */
+.leaflet-safari .leaflet-tile {
+	image-rendering: -webkit-optimize-contrast;
+	}
+/* hack that prevents hw layers "stretching" when loading new tiles */
+.leaflet-safari .leaflet-tile-container {
+	width: 1600px;
+	height: 1600px;
+	-webkit-transform-origin: 0 0;
+	}
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+	display: block;
+	}
+/* .leaflet-container svg: reset svg max-width decleration shipped in Joomla! (joomla.org) 3.x */
+/* .leaflet-container img: map is broken in FF if you have max-width: 100% on tiles */
+.leaflet-container .leaflet-overlay-pane svg {
+	max-width: none !important;
+	max-height: none !important;
+	}
+.leaflet-container .leaflet-marker-pane img,
+.leaflet-container .leaflet-shadow-pane img,
+.leaflet-container .leaflet-tile-pane img,
+.leaflet-container img.leaflet-image-layer,
+.leaflet-container .leaflet-tile {
+	max-width: none !important;
+	max-height: none !important;
+	width: auto;
+	padding: 0;
+	}
+
+.leaflet-container img.leaflet-tile {
+	/* See: https://bugs.chromium.org/p/chromium/issues/detail?id=600120 */
+	mix-blend-mode: plus-lighter;
+}
+
+.leaflet-container.leaflet-touch-zoom {
+	-ms-touch-action: pan-x pan-y;
+	touch-action: pan-x pan-y;
+	}
+.leaflet-container.leaflet-touch-drag {
+	-ms-touch-action: pinch-zoom;
+	/* Fallback for FF which doesn't support pinch-zoom */
+	touch-action: none;
+	touch-action: pinch-zoom;
+}
+.leaflet-container.leaflet-touch-drag.leaflet-touch-zoom {
+	-ms-touch-action: none;
+	touch-action: none;
+}
+.leaflet-container {
+	-webkit-tap-highlight-color: transparent;
+}
+.leaflet-container a {
+	-webkit-tap-highlight-color: rgba(51, 181, 229, 0.4);
+}
+.leaflet-tile {
+	filter: inherit;
+	visibility: hidden;
+	}
+.leaflet-tile-loaded {
+	visibility: inherit;
+	}
+.leaflet-zoom-box {
+	width: 0;
+	height: 0;
+	-moz-box-sizing: border-box;
+	     box-sizing: border-box;
+	z-index: 800;
+	}
+/* workaround for https://bugzilla.mozilla.org/show_bug.cgi?id=888319 */
+.leaflet-overlay-pane svg {
+	-moz-user-select: none;
+	}
+
+.leaflet-pane         { z-index: 400; }
+
+.leaflet-tile-pane    { z-index: 200; }
+.leaflet-overlay-pane { z-index: 400; }
+.leaflet-shadow-pane  { z-index: 500; }
+.leaflet-marker-pane  { z-index: 600; }
+.leaflet-tooltip-pane   { z-index: 650; }
+.leaflet-popup-pane   { z-index: 700; }
+
+.leaflet-map-pane canvas { z-index: 100; }
+.leaflet-map-pane svg    { z-index: 200; }
+
+.leaflet-vml-shape {
+	width: 1px;
+	height: 1px;
+	}
+.lvml {
+	behavior: url(#default#VML);
+	display: inline-block;
+	position: absolute;
+	}
+
+
+/* control positioning */
+
+.leaflet-control {
+	position: relative;
+	z-index: 800;
+	pointer-events: visiblePainted; /* IE 9-10 doesn't have auto */
+	pointer-events: auto;
+	}
+.leaflet-top,
+.leaflet-bottom {
+	position: absolute;
+	z-index: 1000;
+	pointer-events: none;
+	}
+.leaflet-top {
+	top: 0;
+	}
+.leaflet-right {
+	right: 0;
+	}
+.leaflet-bottom {
+	bottom: 0;
+	}
+.leaflet-left {
+	left: 0;
+	}
+.leaflet-control {
+	float: left;
+	clear: both;
+	}
+.leaflet-right .leaflet-control {
+	float: right;
+	}
+.leaflet-top .leaflet-control {
+	margin-top: 10px;
+	}
+.leaflet-bottom .leaflet-control {
+	margin-bottom: 10px;
+	}
+.leaflet-left .leaflet-control {
+	margin-left: 10px;
+	}
+.leaflet-right .leaflet-control {
+	margin-right: 10px;
+	}
+
+
+/* zoom and fade animations */
+
+.leaflet-fade-anim .leaflet-popup {
+	opacity: 0;
+	-webkit-transition: opacity 0.2s linear;
+	   -moz-transition: opacity 0.2s linear;
+	        transition: opacity 0.2s linear;
+	}
+.leaflet-fade-anim .leaflet-map-pane .leaflet-popup {
+	opacity: 1;
+	}
+.leaflet-zoom-animated {
+	-webkit-transform-origin: 0 0;
+	    -ms-transform-origin: 0 0;
+	        transform-origin: 0 0;
+	}
+svg.leaflet-zoom-animated {
+	will-change: transform;
+}
+
+.leaflet-zoom-anim .leaflet-zoom-animated {
+	-webkit-transition: -webkit-transform 0.25s cubic-bezier(0,0,0.25,1);
+	   -moz-transition:    -moz-transform 0.25s cubic-bezier(0,0,0.25,1);
+	        transition:         transform 0.25s cubic-bezier(0,0,0.25,1);
+	}
+.leaflet-zoom-anim .leaflet-tile,
+.leaflet-pan-anim .leaflet-tile {
+	-webkit-transition: none;
+	   -moz-transition: none;
+	        transition: none;
+	}
+
+.leaflet-zoom-anim .leaflet-zoom-hide {
+	visibility: hidden;
+	}
+
+
+/* cursors */
+
+.leaflet-interactive {
+	cursor: pointer;
+	}
+.leaflet-grab {
+	cursor: -webkit-grab;
+	cursor:    -moz-grab;
+	cursor:         grab;
+	}
+.leaflet-crosshair,
+.leaflet-crosshair .leaflet-interactive {
+	cursor: crosshair;
+	}
+.leaflet-popup-pane,
+.leaflet-control {
+	cursor: auto;
+	}
+.leaflet-dragging .leaflet-grab,
+.leaflet-dragging .leaflet-grab .leaflet-interactive,
+.leaflet-dragging .leaflet-marker-draggable {
+	cursor: move;
+	cursor: -webkit-grabbing;
+	cursor:    -moz-grabbing;
+	cursor:         grabbing;
+	}
+
+/* marker & overlays interactivity */
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-image-layer,
+.leaflet-pane > svg path,
+.leaflet-tile-container {
+	pointer-events: none;
+	}
+
+.leaflet-marker-icon.leaflet-interactive,
+.leaflet-image-layer.leaflet-interactive,
+.leaflet-pane > svg path.leaflet-interactive,
+svg.leaflet-image-layer.leaflet-interactive path {
+	pointer-events: visiblePainted; /* IE 9-10 doesn't have auto */
+	pointer-events: auto;
+	}
+
+/* visual tweaks */
+
+.leaflet-container {
+	background: #ddd;
+	outline-offset: 1px;
+	}
+.leaflet-container a {
+	color: #0078A8;
+	}
+.leaflet-zoom-box {
+	border: 2px dotted #38f;
+	background: rgba(255,255,255,0.5);
+	}
+
+
+/* general typography */
+.leaflet-container {
+	font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
+	font-size: 12px;
+	font-size: 0.75rem;
+	line-height: 1.5;
+	}
+
+
+/* general toolbar styles */
+
+.leaflet-bar {
+	box-shadow: 0 1px 5px rgba(0,0,0,0.65);
+	border-radius: 4px;
+	}
+.leaflet-bar a {
+	background-color: #fff;
+	border-bottom: 1px solid #ccc;
+	width: 26px;
+	height: 26px;
+	line-height: 26px;
+	display: block;
+	text-align: center;
+	text-decoration: none;
+	color: black;
+	}
+.leaflet-bar a,
+.leaflet-control-layers-toggle {
+	background-position: 50% 50%;
+	background-repeat: no-repeat;
+	display: block;
+	}
+.leaflet-bar a:hover,
+.leaflet-bar a:focus {
+	background-color: #f4f4f4;
+	}
+.leaflet-bar a:first-child {
+	border-top-left-radius: 4px;
+	border-top-right-radius: 4px;
+	}
+.leaflet-bar a:last-child {
+	border-bottom-left-radius: 4px;
+	border-bottom-right-radius: 4px;
+	border-bottom: none;
+	}
+.leaflet-bar a.leaflet-disabled {
+	cursor: default;
+	background-color: #f4f4f4;
+	color: #bbb;
+	}
+
+.leaflet-touch .leaflet-bar a {
+	width: 30px;
+	height: 30px;
+	line-height: 30px;
+	}
+.leaflet-touch .leaflet-bar a:first-child {
+	border-top-left-radius: 2px;
+	border-top-right-radius: 2px;
+	}
+.leaflet-touch .leaflet-bar a:last-child {
+	border-bottom-left-radius: 2px;
+	border-bottom-right-radius: 2px;
+	}
+
+/* zoom control */
+
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
+	font: bold 18px 'Lucida Console', Monaco, monospace;
+	text-indent: 1px;
+	}
+
+.leaflet-touch .leaflet-control-zoom-in, .leaflet-touch .leaflet-control-zoom-out  {
+	font-size: 22px;
+	}
+
+
+/* layers control */
+
+.leaflet-control-layers {
+	box-shadow: 0 1px 5px rgba(0,0,0,0.4);
+	background: #fff;
+	border-radius: 5px;
+	}
+.leaflet-control-layers-toggle {
+	background-image: url(images/layers.png);
+	width: 36px;
+	height: 36px;
+	}
+.leaflet-retina .leaflet-control-layers-toggle {
+	background-image: url(images/layers-2x.png);
+	background-size: 26px 26px;
+	}
+.leaflet-touch .leaflet-control-layers-toggle {
+	width: 44px;
+	height: 44px;
+	}
+.leaflet-control-layers .leaflet-control-layers-list,
+.leaflet-control-layers-expanded .leaflet-control-layers-toggle {
+	display: none;
+	}
+.leaflet-control-layers-expanded .leaflet-control-layers-list {
+	display: block;
+	position: relative;
+	}
+.leaflet-control-layers-expanded {
+	padding: 6px 10px 6px 6px;
+	color: #333;
+	background: #fff;
+	}
+.leaflet-control-layers-scrollbar {
+	overflow-y: scroll;
+	overflow-x: hidden;
+	padding-right: 5px;
+	}
+.leaflet-control-layers-selector {
+	margin-top: 2px;
+	position: relative;
+	top: 1px;
+	}
+.leaflet-control-layers label {
+	display: block;
+	font-size: 13px;
+	font-size: 1.08333em;
+	}
+.leaflet-control-layers-separator {
+	height: 0;
+	border-top: 1px solid #ddd;
+	margin: 5px -10px 5px -6px;
+	}
+
+/* Default icon URLs */
+.leaflet-default-icon-path { /* used only in path-guessing heuristic, see L.Icon.Default */
+	background-image: url(images/marker-icon.png);
+	}
+
+
+/* attribution and scale controls */
+
+.leaflet-container .leaflet-control-attribution {
+	background: #fff;
+	background: rgba(255, 255, 255, 0.8);
+	margin: 0;
+	}
+.leaflet-control-attribution,
+.leaflet-control-scale-line {
+	padding: 0 5px;
+	color: #333;
+	line-height: 1.4;
+	}
+.leaflet-control-attribution a {
+	text-decoration: none;
+	}
+.leaflet-control-attribution a:hover,
+.leaflet-control-attribution a:focus {
+	text-decoration: underline;
+	}
+.leaflet-attribution-flag {
+	display: inline !important;
+	vertical-align: baseline !important;
+	width: 1em;
+	height: 0.6669em;
+	}
+.leaflet-left .leaflet-control-scale {
+	margin-left: 5px;
+	}
+.leaflet-bottom .leaflet-control-scale {
+	margin-bottom: 5px;
+	}
+.leaflet-control-scale-line {
+	border: 2px solid #777;
+	border-top: none;
+	line-height: 1.1;
+	padding: 2px 5px 1px;
+	white-space: nowrap;
+	-moz-box-sizing: border-box;
+	     box-sizing: border-box;
+	background: rgba(255, 255, 255, 0.8);
+	text-shadow: 1px 1px #fff;
+	}
+.leaflet-control-scale-line:not(:first-child) {
+	border-top: 2px solid #777;
+	border-bottom: none;
+	margin-top: -2px;
+	}
+.leaflet-control-scale-line:not(:first-child):not(:last-child) {
+	border-bottom: 2px solid #777;
+	}
+
+.leaflet-touch .leaflet-control-attribution,
+.leaflet-touch .leaflet-control-layers,
+.leaflet-touch .leaflet-bar {
+	box-shadow: none;
+	}
+.leaflet-touch .leaflet-control-layers,
+.leaflet-touch .leaflet-bar {
+	border: 2px solid rgba(0,0,0,0.2);
+	background-clip: padding-box;
+	}
+
+
+/* popup */
+
+.leaflet-popup {
+	position: absolute;
+	text-align: center;
+	margin-bottom: 20px;
+	}
+.leaflet-popup-content-wrapper {
+	padding: 1px;
+	text-align: left;
+	border-radius: 12px;
+	}
+.leaflet-popup-content {
+	margin: 13px 24px 13px 20px;
+	line-height: 1.3;
+	font-size: 13px;
+	font-size: 1.08333em;
+	min-height: 1px;
+	}
+.leaflet-popup-content p {
+	margin: 17px 0;
+	margin: 1.3em 0;
+	}
+.leaflet-popup-tip-container {
+	width: 40px;
+	height: 20px;
+	position: absolute;
+	left: 50%;
+	margin-top: -1px;
+	margin-left: -20px;
+	overflow: hidden;
+	pointer-events: none;
+	}
+.leaflet-popup-tip {
+	width: 17px;
+	height: 17px;
+	padding: 1px;
+
+	margin: -10px auto 0;
+	pointer-events: auto;
+
+	-webkit-transform: rotate(45deg);
+	   -moz-transform: rotate(45deg);
+	    -ms-transform: rotate(45deg);
+	        transform: rotate(45deg);
+	}
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+	background: white;
+	color: #333;
+	box-shadow: 0 3px 14px rgba(0,0,0,0.4);
+	}
+.leaflet-container a.leaflet-popup-close-button {
+	position: absolute;
+	top: 0;
+	right: 0;
+	border: none;
+	text-align: center;
+	width: 24px;
+	height: 24px;
+	font: 16px/24px Tahoma, Verdana, sans-serif;
+	color: #757575;
+	text-decoration: none;
+	background: transparent;
+	}
+.leaflet-container a.leaflet-popup-close-button:hover,
+.leaflet-container a.leaflet-popup-close-button:focus {
+	color: #585858;
+	}
+.leaflet-popup-scrolled {
+	overflow: auto;
+	}
+
+.leaflet-oldie .leaflet-popup-content-wrapper {
+	-ms-zoom: 1;
+	}
+.leaflet-oldie .leaflet-popup-tip {
+	width: 24px;
+	margin: 0 auto;
+
+	-ms-filter: "progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678, M12=0.70710678, M21=-0.70710678, M22=0.70710678)";
+	filter: progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678, M12=0.70710678, M21=-0.70710678, M22=0.70710678);
+	}
+
+.leaflet-oldie .leaflet-control-zoom,
+.leaflet-oldie .leaflet-control-layers,
+.leaflet-oldie .leaflet-popup-content-wrapper,
+.leaflet-oldie .leaflet-popup-tip {
+	border: 1px solid #999;
+	}
+
+
+/* div icon */
+
+.leaflet-div-icon {
+	background: #fff;
+	border: 1px solid #666;
+	}
+
+
+/* Tooltip */
+/* Base styles for the element that has a tooltip */
+.leaflet-tooltip {
+	position: absolute;
+	padding: 6px;
+	background-color: #fff;
+	border: 1px solid #fff;
+	border-radius: 3px;
+	color: #222;
+	white-space: nowrap;
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+	pointer-events: none;
+	box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+	}
+.leaflet-tooltip.leaflet-interactive {
+	cursor: pointer;
+	pointer-events: auto;
+	}
+.leaflet-tooltip-top:before,
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+	position: absolute;
+	pointer-events: none;
+	border: 6px solid transparent;
+	background: transparent;
+	content: "";
+	}
+
+/* Directions */
+
+.leaflet-tooltip-bottom {
+	margin-top: 6px;
+}
+.leaflet-tooltip-top {
+	margin-top: -6px;
+}
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-top:before {
+	left: 50%;
+	margin-left: -6px;
+	}
+.leaflet-tooltip-top:before {
+	bottom: 0;
+	margin-bottom: -12px;
+	border-top-color: #fff;
+	}
+.leaflet-tooltip-bottom:before {
+	top: 0;
+	margin-top: -12px;
+	margin-left: -6px;
+	border-bottom-color: #fff;
+	}
+.leaflet-tooltip-left {
+	margin-left: -6px;
+}
+.leaflet-tooltip-right {
+	margin-left: 6px;
+}
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+	top: 50%;
+	margin-top: -6px;
+	}
+.leaflet-tooltip-left:before {
+	right: 0;
+	margin-right: -12px;
+	border-left-color: #fff;
+	}
+.leaflet-tooltip-right:before {
+	left: 0;
+	margin-left: -12px;
+	border-right-color: #fff;
+	}
+
+/* Printing */
+
+@media print {
+	/* Prevent printers from removing background-images of controls. */
+	.leaflet-control {
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+		}
+	}
+
+</style>
+<style>
+/* Strait Safe Route - chart styling.
+   Palette follows the ECDIS day/night convention: buff land on pale blue water
+   for day, near-black on deep navy for night. Route colours are a validated
+   categorical set (see docs in the repo README). */
+:root{
+  --ground:#EAE7DE; --panel:#F3F1EA; --panel-2:#E2DED2;
+  --water:#D9E4EB; --land:#DED2B2; --land-line:#B4A57E;
+  --ink:#16242D; --ink-2:#4C5D68; --ink-3:#7C8A93; --rule:#C8C1B0;
+  --rt-a:#12876B; --rt-b:#2E6DB4; --rt-c:#C67A21; --rt-base:#A45C86;
+  --heat-1:rgba(233,197,74,0); --heat-2:rgba(226,168,52,.55); --heat-3:rgba(190,62,38,.82);
+  --good:#2C7A4B; --warn:#B26A06; --bad:#B03A2E;
+  --canal:#7E60A6; --gate:#2E6DB4; --ship:#394A56; --env:#B03A2E; --anch:#6B5B95;
+  --shadow:0 1px 2px rgba(20,30,38,.10),0 8px 24px -12px rgba(20,30,38,.22);
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0A1219; --panel:#101B23; --panel-2:#16232C;
+  --water:#0E1C25; --land:#1D2723; --land-line:#37473D;
+  --ink:#C6D5DE; --ink-2:#8BA0AD; --ink-3:#5F737F; --rule:#1E2D37;
+  --rt-a:#41A87E; --rt-b:#5B94DD; --rt-c:#C48218; --rt-base:#C175A8;
+  --heat-2:rgba(214,152,44,.50); --heat-3:rgba(210,72,44,.80);
+  --good:#4FB37A; --warn:#D79A34; --bad:#D4695C;
+  --canal:#9B7FC4; --gate:#5B94DD; --ship:#B9C8D2; --env:#E0776A; --anch:#A591D0;
+  --shadow:0 1px 2px rgba(0,0,0,.45),0 8px 24px -12px rgba(0,0,0,.65);
+}}
+:root[data-theme="dark"]{
+  --ground:#0A1219; --panel:#101B23; --panel-2:#16232C;
+  --water:#0E1C25; --land:#1D2723; --land-line:#37473D;
+  --ink:#C6D5DE; --ink-2:#8BA0AD; --ink-3:#5F737F; --rule:#1E2D37;
+  --rt-a:#41A87E; --rt-b:#5B94DD; --rt-c:#C48218; --rt-base:#C175A8;
+  --heat-2:rgba(214,152,44,.50); --heat-3:rgba(210,72,44,.80);
+  --good:#4FB37A; --warn:#D79A34; --bad:#D4695C;
+  --canal:#9B7FC4; --gate:#5B94DD; --ship:#B9C8D2; --env:#E0776A; --anch:#A591D0;
+  --shadow:0 1px 2px rgba(0,0,0,.45),0 8px 24px -12px rgba(0,0,0,.65);
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+  font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow:hidden}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+button,select,input{font-family:inherit;color:var(--ink)}
+button,select{background:var(--panel-2);border:1px solid var(--rule);border-radius:5px;
+  padding:5px 9px;font-size:13px;cursor:pointer;max-width:100%}
+button:hover{border-color:var(--ink-3)}
+button:disabled{opacity:.5;cursor:default}
+:focus-visible{outline:2px solid var(--rt-b);outline-offset:2px}
+
+.app{display:grid;grid-template-rows:auto minmax(0,1fr);height:100%}
+.bar{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;
+  padding:9px 14px;padding-top:calc(9px + env(safe-area-inset-top,0px));
+  background:var(--panel);border-bottom:1px solid var(--rule)}
+.brand{display:flex;align-items:baseline;gap:9px;margin-right:auto;min-width:0}
+.brand b{font-size:14.5px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}
+.brand span{font-family:var(--mono);font-size:10px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+.field{display:flex;align-items:center;gap:6px;min-width:0}
+.field label{font-family:var(--mono);font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+.field select{min-width:0}
+.primary{background:var(--rt-b);border-color:var(--rt-b);color:#fff;font-weight:500}
+.primary:hover{filter:brightness(1.08)}
+
+.main{display:grid;grid-template-columns:minmax(0,1fr) 352px;min-height:0}
+.chartwrap{position:relative;min-height:0;background:var(--water)}
+#chart{position:absolute;inset:0}
+.ov{position:absolute;font-family:var(--mono);font-size:10.5px;pointer-events:none}
+.layers{top:10px;left:10px;pointer-events:auto;background:color-mix(in srgb,var(--panel) 92%,transparent);
+  border:1px solid var(--rule);border-radius:6px;padding:8px 10px;display:grid;gap:4px;
+  box-shadow:var(--shadow)}
+.layers strong{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:500}
+.layers label{display:flex;gap:7px;align-items:center;cursor:pointer;
+  color:var(--ink-2);font-size:11px}
+.layers input{accent-color:var(--rt-b);margin:0}
+.status{bottom:10px;left:10px;right:10px;display:flex;flex-wrap:wrap;gap:6px 8px;
+  align-items:center;color:var(--ink-3);max-width:calc(100% - 20px)}
+.chip{background:color-mix(in srgb,var(--panel) 90%,transparent);
+  border:1px solid var(--rule);border-radius:4px;padding:2px 7px;white-space:nowrap}
+.scalebar{display:inline-flex;align-items:center;gap:6px}
+.scalebar i{display:block;height:5px;border:1px solid var(--ink-3);border-top:0}
+.zoombtns{top:10px;right:10px;pointer-events:auto;display:grid;gap:4px}
+.zoombtns button{width:30px;height:30px;padding:0;font-size:16px;line-height:1}
+
+.side{border-left:1px solid var(--rule);background:var(--ground);
+  overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:11px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:8px;
+  padding:11px 12px}
+.card h3{margin:0 0 8px;font-size:10.5px;font-family:var(--mono);letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:500}
+.kv{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:baseline}
+.kv dt{font-size:12px;color:var(--ink-2);margin:0}
+.kv dd{margin:0;font-family:var(--mono);font-size:13.5px;font-variant-numeric:tabular-nums;
+  text-align:right}
+.hero{font-family:var(--mono);font-size:27px;font-weight:600;letter-spacing:-.02em;
+  line-height:1.1}
+.hero small{font-size:12px;font-weight:400;color:var(--ink-3);margin-left:4px}
+.pill{display:inline-block;font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
+  text-transform:uppercase;padding:1px 6px;border-radius:999px;border:1px solid currentColor}
+.pill.ok{color:var(--good)} .pill.early{color:var(--ink-3)} .pill.late{color:var(--bad)}
+.pill.canal{color:var(--canal)}
+.opt{display:grid;grid-template-columns:auto 1fr;gap:9px;align-items:start;width:100%;
+  border:1px solid var(--rule);border-radius:6px;padding:8px 10px;background:var(--panel-2);
+  text-align:left;margin-bottom:7px}
+.opt[aria-pressed="true"]{border-color:var(--sel);box-shadow:inset 3px 0 0 var(--sel)}
+.opt .sw{width:11px;height:11px;border-radius:3px;background:var(--sel);margin-top:3px}
+.opt .nm{font-weight:600;font-size:12.5px}
+.opt .sub{display:block;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);margin-top:2px}
+.bd{display:grid;grid-template-columns:auto 1fr auto;gap:3px 9px;align-items:center;
+  font-family:var(--mono);font-size:11.5px}
+.bd .lbl{color:var(--ink-3)}
+.bd .track{height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden}
+.bd .fill{display:block;height:100%;border-radius:3px}
+input[type=range]{width:100%;accent-color:var(--rt-b)}
+.inputrow{display:grid;grid-template-columns:1fr auto 108px;gap:6px 8px;
+  align-items:center;margin-bottom:6px}
+.inputrow label{font-size:12px;color:var(--ink-2)}
+.inputrow .unit{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--ink-3)}
+.inputrow input,.inputrow select{width:100%;font-family:var(--mono);font-size:12.5px;
+  background:var(--panel-2);border:1px solid var(--rule);border-radius:5px;
+  padding:4px 7px;text-align:right}
+.inputrow select{text-align:left}
+button.linkish{background:none;border:0;padding:2px 0;color:var(--rt-b);
+  font-size:11.5px;text-decoration:underline;text-underline-offset:2px}
+  margin:7px 0 4px;background:var(--panel-2)}
+  text-align:right;margin:6px 0 8px}
+  text-align:right;margin-top:2px}
+  align-items:center;font-family:var(--mono);font-size:11.5px;margin-top:2px}
+  text-transform:uppercase;color:var(--ink-3)}
+.note{font-size:11.5px;color:var(--ink-3);line-height:1.45;margin:8px 0 0}
+.warnbox{border-left:2px solid var(--warn);padding:7px 0 7px 11px;font-size:11.5px;
+  color:var(--ink-2);margin-top:9px}
+.warnbox b{color:var(--ink)}
+.blocked{display:grid;gap:3px;font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+.blocked span{color:var(--ink-3)}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.legend{display:flex;flex-wrap:wrap;gap:3px 12px;margin-top:8px;font-size:11px;color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:10px;height:10px;border-radius:2px;display:block}
+.spinner{display:inline-block;width:11px;height:11px;border:2px solid var(--rule);
+  border-top-color:var(--rt-b);border-radius:50%;animation:spin .7s linear infinite;
+  vertical-align:-1px;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spinner{animation:none}}
+@media (max-width:920px){
+  body{overflow:auto}
+  .app{height:auto;grid-template-rows:auto auto}
+  .main{grid-template-columns:minmax(0,1fr)}
+  .chartwrap{height:58vh;min-height:320px}
+  .side{border-left:0;border-top:1px solid var(--rule);overflow:visible}
+}
+
+.check{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;cursor:pointer;margin:0 0 8px}
+.check input{accent-color:var(--rt-b);margin:2px 0 0}
+.check small{display:block;color:var(--ink-3);font-size:10.5px}
+.sublabel{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);margin:10px 0 5px}
+.sublabel span{text-transform:none;letter-spacing:0;font-family:var(--sans);font-size:10.5px;margin-left:4px}
+.dim{opacity:.45;pointer-events:none}
+
+/* Leaflet chart */
+.leaflet-container{background:var(--water);font-family:var(--sans)}
+#chart.offline .leaflet-tile-pane{display:none}
+.leaflet-control-attribution{font-size:10px;background:color-mix(in srgb,var(--panel) 85%,transparent)!important;color:var(--ink-3)}
+.leaflet-control-attribution a{color:var(--rt-b)}
+.leaflet-tooltip{font-family:var(--mono);font-size:10.5px;background:var(--panel);color:var(--ink);
+  border:1px solid var(--rule);box-shadow:var(--shadow);border-radius:4px;padding:2px 6px}
+.leaflet-tooltip.port-label{background:color-mix(in srgb,var(--panel) 88%,transparent)}
+.leaflet-tooltip.port-label.on{font-weight:600}
+.leaflet-tooltip-right:before{border-right-color:var(--rule)}
+.density-img{image-rendering:auto;mix-blend-mode:multiply}
+:root[data-theme="dark"] .density-img{mix-blend-mode:screen}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .density-img{mix-blend-mode:screen}}
+.ship-icon{filter:drop-shadow(0 1px 2px rgba(0,0,0,.45));cursor:pointer}
+.ship-icon div{transform-origin:15px 15px}
+.status{z-index:600} .layers,.zoombtns{z-index:700}
+.segs{display:grid;grid-template-columns:1fr 1fr;gap:3px;margin-top:2px}
+.segs label{position:relative;cursor:pointer;display:block}
+.segs input{position:absolute;opacity:0;pointer-events:none}
+.segs span{display:block;text-align:center;font-size:10.5px;padding:3px 4px;border:1px solid var(--rule);
+  border-radius:4px;background:var(--panel-2);color:var(--ink-2)}
+.segs input:checked+span{border-color:var(--rt-b);color:var(--ink);box-shadow:inset 0 0 0 1px var(--rt-b);font-weight:600}
+.segs input:focus-visible+span{outline:2px solid var(--rt-b);outline-offset:1px}
+.layers label.dim{opacity:.45}
+/* ship view */
+.h3note{font-size:9px;border:1px solid var(--rule);border-radius:999px;padding:0 5px;margin-left:4px}
+.ship3d{position:relative;height:210px;border-radius:6px;overflow:hidden;background:#0b1a26}
+.ship3d.big{height:auto;flex:1;border-radius:0}
+.ship3d canvas{display:block;touch-action:none}
+.ship3d-expand{position:absolute;right:6px;top:6px;z-index:2;font-size:11px;padding:3px 7px;
+  background:rgba(10,20,30,.55);color:#fff;border-color:rgba(255,255,255,.3)}
+.ship3d-placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  margin:0;color:#9bb}
+.shipmodal{position:fixed;inset:0;z-index:2000;background:rgba(5,10,16,.72);display:flex;padding:24px}
+.shipmodal[hidden]{display:none}
+.shipmodal-inner{flex:1;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--rule);
+  border-radius:10px;overflow:hidden;box-shadow:var(--shadow)}
+.shipmodal header{display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--rule)}
+.shipmodal header b{margin-right:auto;font-size:13px}
+.shipmodal .views{display:flex;gap:4px}
+.shipmodal .views button{font-size:11.5px;padding:3px 8px}
+.shipmodal footer{padding:6px 12px;margin:0;border-top:1px solid var(--rule)}
+@media (max-width:920px){.shipmodal{padding:0}.shipmodal-inner{border-radius:0}}
+
+.chip.warn{color:var(--warn);border-color:var(--warn)}
+
+/* ---- safe-route additions ---- */
+.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin:0 0 10px}
+.modes button{font-size:11.5px;padding:5px 4px;text-align:center;border-radius:5px}
+.modes button[aria-selected="true"]{border-color:var(--sel);box-shadow:inset 0 -3px 0 var(--sel);font-weight:600;color:var(--ink)}
+.modes button .sw{display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--sel);margin-right:5px;vertical-align:0}
+.hero-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.hero-row .sub{font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+table.cmp{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px}
+table.cmp th{font-weight:500;color:var(--ink-3);text-align:right;padding:2px 4px;font-size:10px;white-space:nowrap}
+table.cmp th:first-child,table.cmp td:first-child{text-align:left;font-family:var(--sans);font-size:11.5px;color:var(--ink-2)}
+table.cmp td{text-align:right;padding:3px 4px;border-top:1px solid var(--rule);font-variant-numeric:tabular-nums}
+table.cmp td.best{color:var(--good);font-weight:600}
+.enc{display:grid;gap:4px;max-height:260px;overflow:auto}
+.enc button{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;text-align:left;
+  font-size:11.5px;padding:5px 7px;background:var(--panel-2)}
+.enc .tag{font-family:var(--mono);font-size:9.5px;border:1px solid var(--rule);border-radius:999px;padding:0 6px;color:var(--ink-3)}
+.enc .d{font-family:var(--mono);font-size:11px}
+.enc .d.bad{color:var(--bad)} .enc .d.warn{color:var(--warn)}
+.near{display:grid;gap:2px;font-family:var(--mono);font-size:11px}
+.near div{display:grid;grid-template-columns:1fr auto;gap:8px}
+.near span:first-child{color:var(--ink-2);font-family:var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.near .bad{color:var(--bad)} .near .warn{color:var(--warn)}
+.navbtns{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:6px}
+.navbtns button{font-size:11px;padding:3px 6px}
+.counts{display:flex;flex-wrap:wrap;gap:4px 6px;font-family:var(--mono);font-size:10.5px;color:var(--ink-2)}
+.counts span{border:1px solid var(--rule);border-radius:999px;padding:0 7px}
+.typechecks{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px}
+.typechecks label{display:flex;gap:6px;align-items:center;font-size:12px;cursor:pointer}
+.typechecks input{accent-color:var(--rt-b);margin:0}
+.typechecks i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.uploadbtn{display:inline-block;cursor:pointer;background:var(--panel-2);border:1px solid var(--rule);
+  border-radius:5px;padding:5px 9px;font-size:12.5px}
+.uploadbtn input{display:none}
+.cparules{display:grid;grid-template-columns:1fr auto auto;gap:2px 10px;font-family:var(--mono);font-size:10.5px;margin-top:6px}
+.cparules span:nth-child(3n+1){font-family:var(--sans);color:var(--ink-2);font-size:11px}
+.cparules .h{color:var(--ink-3);font-size:9.5px}
+code{font-family:var(--mono);font-size:.92em;background:var(--panel-2);padding:0 4px;border-radius:3px}
+.pickhint{top:52px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--panel);
+  padding:5px 12px;border-radius:999px;font-size:11.5px;z-index:800}
+.legend-ov{right:10px;bottom:40px;z-index:650;background:color-mix(in srgb,var(--panel) 92%,transparent);
+  border:1px solid var(--rule);border-radius:6px;padding:7px 9px;display:grid;gap:3px;font-size:10.5px;color:var(--ink-2)}
+.legend-ov span{display:flex;align-items:center;gap:6px}
+.legend-ov i{width:11px;height:11px;border-radius:2px;display:block;border:1px solid rgba(0,0,0,.15)}
+.ship-lbl{font-family:var(--mono);font-size:10px}
+.leaflet-tooltip.anch-label{background:transparent;border:0;box-shadow:none;color:var(--anch);font-weight:600;font-size:9.5px;padding:0}
+.leaflet-tooltip.anch-label:before{display:none}
+.leaflet-tooltip.cpa-label{background:var(--bad);color:#fff;border:0;font-size:10px;padding:1px 5px}
+.leaflet-tooltip.cpa-label:before{display:none}
+.playrow{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px;color:var(--ink-2);flex-wrap:wrap}
+.playrow select{font-size:12px;padding:3px 6px}
+#playbtn{min-width:92px}
+.todrow{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px;color:var(--ink-2)}
+.todrow select{font-size:12px;padding:3px 6px}
+
+html,body{height:100%}
+</style>
+<script type="importmap">{"imports": {"three": "./vendor/three/three.module.js"}}</script>
+
+<div class="app">
+
+  <header class="bar">
+    <div class="brand">
+      <b>Strait Safe Route</b>
+      <span id="brandsub">Singapore Strait &harr; Singapore terminals &middot; runs in your browser</span>
+    </div>
+    <div class="field"><label for="origin">From</label><select id="origin"></select></div>
+    <button type="button" id="swap" title="Swap from and to">&#8646;</button>
+    <div class="field"><label for="dest">To</label><select id="dest"></select></div>
+    <div class="field"><label for="vessel">Own ship</label><select id="vessel"></select></div>
+    <div class="field"><label for="snapshot">Ships</label><select id="snapshot"></select></div>
+    <button id="plan" class="primary" type="button">Find route</button>
+    <button id="theme" type="button" title="Switch day/night chart">Night</button>
+  </header>
+
+  <div class="main">
+    <div class="chartwrap">
+      <div id="chart" role="application" aria-label="Route chart"></div>
+      <div class="ov layers">
+        <strong>Chart layers</strong>
+        <label><input type="checkbox" id="L-ships" checked> Stationary ships</label>
+        <label><input type="checkbox" id="L-env" checked> Swing circles &amp; CPA rings</label>
+        <label title="The board the router solves: every cell classified as free, land, too shallow, too close to shore, a ship's exclusion zone or inside a ship's target CPA">
+          <input type="checkbox" id="L-board"> Router&rsquo;s board</label>
+        <label><input type="checkbox" id="L-depth"> Depth</label>
+        <label><input type="checkbox" id="L-tss" checked> Traffic separation scheme</label>
+        <label><input type="checkbox" id="L-anch" checked> Anchorages &amp; pilot grounds</label>
+        <label><input type="checkbox" id="L-alt" checked> Other routes</label>
+      </div>
+      <div class="ov zoombtns">
+        <button id="zin" type="button" title="Zoom in">+</button>
+        <button id="zout" type="button" title="Zoom out">&minus;</button>
+        <button id="zfit" type="button" title="Fit route" style="font-size:11px">fit</button>
+      </div>
+      <div class="ov pickhint" id="pickhint" hidden></div>
+      <div class="ov legend-ov" id="boardlegend" hidden></div>
+      <div class="ov status">
+        <span class="chip" id="cursor">&mdash;</span>
+        <span class="chip scalebar"><i id="scaleline"></i><span id="scaletext"></span></span>
+        <span class="chip" id="gridinfo">&mdash;</span>
+      </div>
+    </div>
+
+    <aside class="side" id="side">
+      <div class="card"><h3>Chart</h3><p class="note"><span class="spinner"></span>Building the board&hellip;</p></div>
+    </aside>
+  </div>
+</div>
+
+<template id="tpl-result">
+  <div class="card">
+    <h3>Route <span class="h3note" data-f="odlabel"></span></h3>
+    <div class="modes" data-f="modes" role="tablist" aria-label="Route"></div>
+    <div class="hero-row">
+      <div><div class="hero"><span data-f="distance">&mdash;</span><small>NM</small></div>
+        <div class="sub" data-f="time"></div></div>
+      <div><div class="hero"><span data-f="met">&mdash;</span><small>ships met</small></div>
+        <div class="sub" data-f="metnote"></div></div>
+    </div>
+    <dl class="kv" style="margin:9px 0 0">
+      <dt>Closest ship envelope</dt><dd data-f="minenv">&mdash;</dd>
+      <dt>Closest ship hull</dt><dd data-f="minhull">&mdash;</dd>
+      <dt>Sailed inside a target CPA</dt><dd data-f="inside">&mdash;</dd>
+      <dt>Closest land</dt><dd data-f="minshore">&mdash;</dd>
+      <dt>Least under-keel clearance</dt><dd data-f="minukc">&mdash;</dd>
+      <dt>Legs / largest course change</dt><dd data-f="legs">&mdash;</dd>
+      <dt>Detour vs straight line</dt><dd data-f="detour">&mdash;</dd>
+    </dl>
+    <p class="note" data-f="feasnote"></p>
+    <a class="linkish" data-f="csv" href="#">Copy waypoints as CSV</a>
+  </div>
+
+  <div class="card">
+    <h3>Shortest vs safest</h3>
+    <div data-f="compare"></div>
+    <p class="note">Every route obeys the same hard limits (land, depth + UKC, shore clearance,
+      each ship&rsquo;s exclusion zone, TSS direction). They differ only in how far each will
+      go to keep ships outside their <em>target</em> passing distance.</p>
+  </div>
+
+  <div class="card">
+    <h3>Ships met on this route <span class="h3note" data-f="metcount"></span></h3>
+    <div class="enc" data-f="encounters"></div>
+  </div>
+
+  <div class="card" data-f="shipcard">
+    <h3>Ship view <span class="h3note">3D</span></h3>
+    <div class="ship3d" id="ship3d-inline">
+      <button type="button" class="ship3d-expand" id="shipexpand" title="Full screen">&#x2922; Full view</button>
+      <p class="note ship3d-placeholder">Loading 3D view&hellip;</p>
+    </div>
+    <label class="note" style="display:block;margin:8px 0 4px" for="shipfrac">
+      Position along the route <span class="num" id="shipfracval"></span>
+    </label>
+    <input type="range" id="shipfrac" min="0" max="1000" step="1" value="350">
+    <div class="playrow">
+      <button type="button" id="playbtn" class="primary" aria-pressed="false">▶ Play</button>
+      <label for="playspeed">Speed</label>
+      <select id="playspeed">
+        <option value="10">10×</option><option value="30">30×</option><option value="60" selected>60×</option>
+        <option value="120">120×</option><option value="300">300×</option>
+      </select>
+      <span class="note" style="margin:0">at 12 kn</span>
+    </div>
+    <div class="todrow"><label for="tod">Light</label>
+      <select id="tod">
+        <option value="day">Day (10:00)</option><option value="dawn">Dawn (07:00)</option>
+        <option value="dusk">Dusk (19:10)</option><option value="night">Night (23:00)</option>
+        <option value="now">Now (your clock)</option>
+      </select></div>
+    <div class="navbtns">
+      <button type="button" id="prevclose" title="Previous close pass">&#9664; close pass</button>
+      <button type="button" id="nextclose" title="Next close pass">close pass &#9654;</button>
+    </div>
+    <dl class="kv" style="margin-top:6px">
+      <dt>Position</dt><dd data-f="shippos">&mdash;</dd>
+      <dt>Heading</dt><dd data-f="shiphdg">&mdash;</dd>
+    </dl>
+    <div class="sublabel">Nearest ships from here</div>
+    <div class="near" data-f="nearest"></div>
+    <p class="note" data-f="shipnote"></p>
+  </div>
+
+  <div class="card">
+    <h3>Ship snapshot</h3>
+    <p class="note" style="margin-top:0" data-f="snaplabel"></p>
+    <div class="counts" data-f="snapcounts"></div>
+    <div class="sublabel">Treat as obstacles <span>untick a type to ignore it</span></div>
+    <div class="typechecks" data-f="types"></div>
+    <label class="check" style="margin-top:8px">
+      <input type="checkbox" id="swing">
+      <span>Plan round the full swing circle of anchored ships
+        <small>An anchored ship swings round its anchor with the tide. Off = plan round the hull where it is now.</small></span>
+    </label>
+    <label class="note" style="display:block;margin:6px 0 4px" for="cpascale">
+      Passing distances &times; <span class="num" data-f="cpascaleval"></span></label>
+    <input type="range" id="cpascale" min="50" max="200" step="5" value="100">
+    <div data-f="cparules"></div>
+    <div class="sublabel" style="margin-top:12px">Use a real AIS snapshot</div>
+    <label class="uploadbtn"><input type="file" id="snapfile" accept=".csv,text/csv"> Upload AIS CSV&hellip;</label>
+    <p class="note" data-f="uploadnote">Either the app&rsquo;s snapshot format, or a raw AIS extract
+      (MMSI, time, Lat, Lon, SoG, NavStatus&hellip;) &mdash; stationary ships are picked out
+      automatically. To capture one live, run <code>scripts/capture_ais_snapshot.py</code>
+      with a free aisstream.io key.</p>
+  </div>
+
+  <div class="card">
+    <h3>Search</h3>
+    <div class="bd" data-f="search"></div>
+    <button type="button" data-f="benchbtn" style="margin-top:9px;width:100%">Compare Dijkstra vs A*</button>
+    <div data-f="bench"></div>
+  </div>
+</template>
+
+<div class="shipmodal" id="shipmodal" hidden>
+  <div class="shipmodal-inner" role="dialog" aria-modal="true" aria-labelledby="shipmodaltitle">
+    <header>
+      <b id="shipmodaltitle">Ship view</b>
+      <div class="views">
+        <button type="button" data-view="quarter">Quarter</button>
+        <button type="button" data-view="side">Side</button>
+        <button type="button" data-view="bow">Bow</button>
+        <button type="button" data-view="bridge">Bridge</button>
+        <button type="button" data-view="surroundings">Surroundings</button>
+        <button type="button" data-view="wide">Wide</button>
+      </div>
+      <button type="button" id="modalplay" class="primary">▶ Play</button>
+      <button type="button" id="shipclose">Close</button>
+    </header>
+    <div class="ship3d big" id="ship3d-modal"></div>
+    <footer class="note" id="shipmodalnote">Drag to orbit, scroll to zoom. Rings on the water: 0.1, 0.25, 0.5 and 1 NM from your ship. Space bar plays and pauses. Buildings: OpenStreetMap contributors (heights partly estimated); quay cranes and container yards are representative.</footer>
+  </div>
+</div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="engine.js"></script>
+<script src="map.js"></script>
+<script src="app.js"></script>

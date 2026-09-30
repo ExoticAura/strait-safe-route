@@ -1,0 +1,5 @@
+vessel,nodes,edges,build_s,cells_free water,cells_land,cells_too shallow,cells_too close to shore,cells_ship exclusion,cells_inside a ship's target CPA
+FEEDER,50736,726166,0.2,50268,42820,13027,0,3473,1398
+PANAMAX,47925,684573,0.17,47129,42820,16791,0,2971,1275
+NPX,45756,652621,0.17,44782,42820,19703,0,2519,1162
+ULCS,44571,635019,0.16,43603,42820,21200,0,2296,1067

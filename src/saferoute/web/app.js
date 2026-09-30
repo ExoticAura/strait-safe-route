@@ -1,0 +1,500 @@
+/* Strait Safe Route - front end.
+ *
+ * Asks the local server for the shortest, balanced and safest routes between
+ * a strait entrance (or any point picked on the chart) and a Singapore
+ * terminal, around every stationary ship in the chosen snapshot, and shows how
+ * close each route comes to those ships - on the chart and in 3D.
+ */
+"use strict";
+
+const $ = (s, r) => (r || document).querySelector(s);
+const $$ = (s, r) => [...(r || document).querySelectorAll(s)];
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const MODE_VARS = {shortest: "--rt-c", balanced: "--rt-b", safest: "--rt-a"};
+const MODE_NAMES = {shortest: "Shortest", balanced: "Balanced", safest: "Safest"};
+const NM = 1852;
+
+const S = {
+  meta: null, ships: null, result: null, sel: 0, board: null, busy: false, pending: false,
+  frac: 0.35, ignored: new Set(), swing: true, cpaScale: 1.0, picking: null,
+  custom: {origin: null, dest: null}, wantMode: "safest", tod: "day",
+};
+
+const fmt = (v, d = 1) => (v == null || !isFinite(v)) ? "—"
+  : Number(v).toLocaleString("en-SG", {minimumFractionDigits: d, maximumFractionDigits: d});
+const esc = s => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+function dur(h) {
+  if (!isFinite(h)) return "—";
+  const hh = Math.floor(h), m = Math.round((h - hh) * 60);
+  return `${hh}h ${String(m).padStart(2, "0")}m`;
+}
+function dm(v, hemi) {
+  const h = v < 0 ? hemi[1] : hemi[0], a = Math.abs(v), d = Math.floor(a), m = (a - d) * 60;
+  return `${d}°${m.toFixed(2).padStart(5, "0")}'${h}`;
+}
+const nmTxt = v => v == null || !isFinite(v) ? "—" : `${fmt(v, 2)} NM · ${fmt(v * NM, 0)} m`;
+
+/* =====================================================================
+   chart
+   ===================================================================== */
+const LAYER_IDS = {ships: "L-ships", env: "L-env", board: "L-board", depth: "L-depth",
+                   tss: "L-tss", anch: "L-anch", alt: "L-alt"};
+function readLayers() {
+  const o = {};
+  for (const [k, id] of Object.entries(LAYER_IDS)) o[k] = !!$("#" + id).checked;
+  return o;
+}
+function savedBasemap() { try { return localStorage.getItem("sr.basemap") || "simple"; } catch (e) { return "simple"; } }
+
+const CM = ChartMap.create($("#chart"), {
+  basemap: savedBasemap(),
+  cursorEl: $("#cursor"), scaleLine: $("#scaleline"), scaleText: $("#scaletext"),
+  ignoredTypes: () => [...S.ignored],
+  onRouteClick: i => { S.sel = i; S.wantMode = S.result.plans[i].mode; renderSide(); CM.setSelected(i); updateOwn(); },
+  onOwnClick: () => openShipView(true),
+  onEncounterClick: e => goToEncounter(e),
+  onShipClick: s => { if (S.picking) return; },
+  onMapClick: ll => pickPoint(ll),
+  onBasemapFail: name => {
+    syncBasemapUI();
+    $("#gridinfo").textContent = `${name} tiles unavailable — showing Offline`;
+    $("#gridinfo").classList.add("warn");
+  },
+});
+const isDark = () => document.documentElement.getAttribute("data-theme") === "dark" ||
+  (!document.documentElement.hasAttribute("data-theme") && matchMedia("(prefers-color-scheme: dark)").matches);
+CM.setTheme(isDark());
+
+function syncBasemapUI() { $$("#basemap input").forEach(i => { i.checked = i.value === CM.basemap; }); }
+$$("#basemap input").forEach(i => i.onchange = () => {
+  CM.setBasemap(i.value);
+  try { localStorage.setItem("sr.basemap", i.value); } catch (e) { /* private mode */ }
+  syncBasemapUI();
+});
+Object.values(LAYER_IDS).forEach(id => $("#" + id).onchange = () => {
+  CM.setLayers(readLayers());
+  if (id === "L-board") { $("#boardlegend").hidden = !$("#L-board").checked; if ($("#L-board").checked) loadBoard(); }
+});
+CM.setLayers(readLayers());
+CM.setBasemap(savedBasemap());
+syncBasemapUI();
+$("#zin").onclick = () => CM.zoomIn();
+$("#zout").onclick = () => CM.zoomOut();
+$("#zfit").onclick = () => CM.fitResult();
+
+function boardLegend() {
+  const labels = (S.meta && S.meta.board_labels) || {};
+  $("#boardlegend").innerHTML = "<b style='font-size:10px'>Router&rsquo;s board</b>" + Object.entries(labels)
+    .filter(([k]) => +k >= 2).map(([k, v]) => {
+      const c = CM.BOARD_COLOURS[k];
+      return `<span><i style="background:rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, c[3] + .2)})"></i>${esc(v)}</span>`;
+    }).join("") + "<span><i style='background:transparent'></i>clear: free water</span>";
+}
+
+/* =====================================================================
+   picking a point on the chart
+   ===================================================================== */
+function pickPoint(ll) {
+  if (!S.picking) return;
+  const b = S.meta.bbox;
+  if (ll.lat < b.lat_min || ll.lat > b.lat_max || ll.lng < b.lon_min || ll.lng > b.lon_max) return;
+  const which = S.picking;
+  S.custom[which] = [ll.lat, ll.lng];
+  S.picking = null; $("#pickhint").hidden = true;
+  fillPointSelects();
+  plan();
+}
+function fillPointSelects() {
+  for (const which of ["origin", "dest"]) {
+    const sel = $("#" + which), cur = sel.value;
+    const opts = S.meta.ports.map(p => `<option value="${p.code}">${esc(p.name)}</option>`);
+    const c = S.custom[which];
+    if (c) opts.push(`<option value="${c[0].toFixed(5)},${c[1].toFixed(5)}">Chart point ${c[0].toFixed(4)}, ${c[1].toFixed(4)}</option>`);
+    opts.push(`<option value="__pick">Pick on chart…</option>`);
+    sel.innerHTML = opts.join("");
+    if (c && (cur === "__pick" || cur.includes(","))) sel.value = `${c[0].toFixed(5)},${c[1].toFixed(5)}`;
+    else if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  }
+}
+["origin", "dest"].forEach(id => $("#" + id).addEventListener("change", e => {
+  if (e.target.value === "__pick") {
+    S.picking = id;
+    $("#pickhint").textContent = `Click the chart to set the ${id === "origin" ? "start" : "end"} point`;
+    $("#pickhint").hidden = false;
+    return;
+  }
+  plan();
+}));
+$("#swap").onclick = () => {
+  const o = $("#origin").value, d = $("#dest").value;
+  [S.custom.origin, S.custom.dest] = [S.custom.dest, S.custom.origin];
+  fillPointSelects();
+  $("#origin").value = d; $("#dest").value = o;
+  plan();
+};
+
+/* =====================================================================
+   own ship along the route, nearest ships, 3D view
+   ===================================================================== */
+let SHIP = null, shipLoading = null;
+function selectedPlan() { const r = S.result; return r && r.found ? (r.plans[S.sel] || r.plans[0]) : null; }
+function vesselObj() { return (S.meta.vessels || []).find(v => v.code === $("#vessel").value) || S.meta.vessels[0]; }
+
+function nearestShips(lat, lon, n = 6) {
+  if (!S.ships) return [];
+  const v = vesselObj(), halfBeam = v.beam_m / 2 / NM;
+  return S.ships.ships.map(s => {
+    const c = CM.hav([lat, lon], [s.lat, s.lon]);
+    const hull = c - s.loa_m / 2 / NM - halfBeam;
+    return {s, lat: s.lat, lon: s.lon, hull_nm: Math.max(hull, 0), centre_nm: c,
+            env_nm: CM.hav([lat, lon], [s.env[0], s.env[1]]) - s.env[2] - halfBeam,
+            brg: CM.bearing([lat, lon], [s.lat, s.lon]),
+            cls: hull < 0.2 ? "bad" : hull < 0.5 ? "warn" : ""};
+  }).filter(o => !S.ignored.has(o.s.ship_type)).sort((a, b) => a.hull_nm - b.hull_nm).slice(0, n);
+}
+function ownState() {
+  const p = selectedPlan();
+  if (!p) return null;
+  const pt = CM.pointAlong(p.coords, S.frac);
+  return {p, pt, near: nearestShips(pt.lat, pt.lon, 14), vessel: vesselObj()};
+}
+function updateOwn() {
+  const st = ownState();
+  if (!st) { CM.setOwn(null); return; }
+  CM.setOwn({lat: st.pt.lat, lon: st.pt.lon, heading: st.pt.heading, vessel: st.vessel,
+             nearest: st.near.slice(0, 3), label: `${st.vessel.name} · ${fmt(st.pt.nm, 2)} NM along`});
+  if (SHIP) {
+    const now = new Date();
+    // Singapore local time (UTC+8) for the fixed presets
+    const TOD = {day: 2, dawn: 23, dusk: 11.17, night: 15};
+    const utcHour = S.tod === "now" ? now.getUTCHours() + now.getUTCMinutes() / 60 : TOD[S.tod];
+    SHIP.setParams({vessel: st.vessel, sog: S.meta.planning_speed_kn, heading: st.pt.heading,
+      lat: st.pt.lat, lon: st.pt.lon, utcHour,
+      neighbours: st.near.filter(o => o.centre_nm < 2.2).map(o => {
+        const e = (o.s.lon - st.pt.lon) * 111320 * Math.cos(st.pt.lat * Math.PI / 180);
+        const n = (o.s.lat - st.pt.lat) * 111320;
+        return {id: o.s.id, east_m: e, north_m: n, heading: o.s.heading_deg, loa_m: o.s.loa_m,
+                beam_m: o.s.beam_m, draught_m: o.s.draught_m, ship_type: o.s.ship_type,
+                status: o.s.status, hull_nm: o.hull_nm, name: o.s.name || o.s.id, cls: o.cls};
+      })});
+  }
+  paintOwnCard(st);
+}
+function paintOwnCard(st) {
+  const side = $("#side"), f = k => $(`[data-f="${k}"]`, side);
+  const val = $("#shipfracval", side);
+  if (!val || !st) return;
+  val.textContent = `${fmt(st.pt.nm, 2)} of ${fmt(st.pt.total, 2)} NM`;
+  f("shippos").textContent = dm(st.pt.lat, "NS") + " " + dm(st.pt.lon, "EW");
+  f("shiphdg").textContent = Math.round(st.pt.heading) + "°";
+  f("nearest").innerHTML = st.near.slice(0, 6).map(o =>
+    `<div><span>${esc(o.s.name || o.s.id)} · ${esc(o.s.ship_type)} ${Math.round(o.s.loa_m)} m · ${Math.round(o.brg)}°</span>
+      <span class="${o.cls}">${fmt(o.hull_nm, 2)} NM · ${fmt(o.hull_nm * NM, 0)} m</span></div>`).join("")
+    || `<div><span>no ships in the snapshot</span></div>`;
+  f("shipnote").textContent = "Distances are hull to hull at the snapshot positions (your ship's side to the other ship's nearest end). "
+    + "The router plans against the larger swing circle of each anchored ship.";
+}
+function loadShip(el) {
+  if (SHIP) { SHIP.attach(el); updateOwn(); return Promise.resolve(SHIP); }
+  if (!shipLoading) shipLoading = import("./ship3d.js").then(m => {
+    SHIP = m.createShipView(el);
+    const ph = $(".ship3d-placeholder"); if (ph) ph.remove();
+    updateOwn(); return SHIP;
+  }).catch(err => {
+    const ph = $(".ship3d-placeholder"); if (ph) ph.textContent = "3D view unavailable: " + err.message;
+  });
+  return shipLoading;
+}
+function openShipView(modal) {
+  if (!modal) { const c = $('[data-f="shipcard"]'); if (c) c.scrollIntoView({behavior: "smooth", block: "nearest"}); return; }
+  const m = $("#shipmodal"), st = ownState();
+  m.hidden = false;
+  if (st) $("#shipmodaltitle").textContent = `${st.vessel.name} — ${fmt(st.pt.nm, 2)} NM along the ${st.p.mode} route`;
+  loadShip($("#ship3d-modal")).then(() => SHIP && SHIP.view("surroundings"));
+  $("#shipclose").focus();
+}
+function closeShipView() {
+  $("#shipmodal").hidden = true;
+  const inline = $("#ship3d-inline");
+  if (SHIP && inline) { SHIP.attach(inline); SHIP.view("quarter"); }
+}
+$("#shipclose").onclick = closeShipView;
+$("#shipmodal").addEventListener("click", e => { if (e.target.id === "shipmodal") closeShipView(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    if (!$("#shipmodal").hidden) closeShipView();
+    if (S.picking) { S.picking = null; $("#pickhint").hidden = true; fillPointSelects(); }
+  }
+});
+$$("#shipmodal .views button").forEach(b => b.onclick = () => SHIP && SHIP.view(b.dataset.view));
+
+function setFrac(f) {
+  S.frac = Math.max(0, Math.min(1, f));
+  const sl = $("#shipfrac"); if (sl) sl.value = Math.round(S.frac * 1000);
+  updateOwn();
+}
+function goToEncounter(e) {
+  const p = selectedPlan(); if (!p) return;
+  setFrac(e.along_nm / p.metrics.distance_nm);
+  CM.focus(e.at[0], e.at[1], 15);
+}
+function stepEncounter(dir) {
+  const p = selectedPlan(); if (!p || !p.encounters.length) return;
+  const here = S.frac * p.metrics.distance_nm;
+  const list = [...p.encounters].sort((a, b) => a.along_nm - b.along_nm);
+  const e = dir > 0 ? list.find(x => x.along_nm > here + 0.01) || list[0]
+                    : [...list].reverse().find(x => x.along_nm < here - 0.01) || list[list.length - 1];
+  goToEncounter(e);
+}
+
+/* =====================================================================
+   side panel
+   ===================================================================== */
+function renderSide() {
+  const r = S.result, side = $("#side");
+  if (!r) return;
+  if (!r.found) {
+    side.innerHTML = `<div class="card"><h3>No route</h3><p class="note">${esc(r.reason || "no feasible route")}</p>
+      <p class="note">Try a smaller ship, another terminal, a smaller passing-distance factor, or
+      untick ship types to ignore.</p></div>`;
+    renderSnapshotCard(side, true);
+    return;
+  }
+  side.innerHTML = "";
+  side.appendChild($("#tpl-result").content.cloneNode(true));
+  const f = k => $(`[data-f="${k}"]`, side);
+  const p = r.plans[S.sel] || r.plans[0], m = p.metrics;
+
+  f("odlabel").textContent = `${r.origin_label} → ${r.destination_label}`;
+  f("modes").innerHTML = r.plans.map((q, i) =>
+    `<button type="button" role="tab" data-i="${i}" aria-selected="${i === S.sel}"
+      style="--sel:var(${MODE_VARS[q.mode]})"><span class="sw"></span>${esc(q.label.includes("alternative")
+      ? q.label.replace(q.mode, MODE_NAMES[q.mode]) : MODE_NAMES[q.mode])}</button>`).join("");
+  $$("button", f("modes")).forEach(b => b.onclick = () => {
+    S.sel = +b.dataset.i; S.wantMode = r.plans[S.sel].mode; renderSide(); CM.setSelected(S.sel); updateOwn();
+  });
+  f("distance").textContent = fmt(m.distance_nm, 2);
+  f("time").textContent = `${dur(m.passage_h)} at ${S.meta.planning_speed_kn} kn`;
+  f("met").textContent = m.obstacles_met;
+  f("metnote").textContent = `of ${m.ships_considered} stationary ships`;
+  f("minenv").textContent = nmTxt(m.min_ship_clear_nm);
+  f("minhull").textContent = nmTxt(m.min_hull_dist_nm);
+  f("inside").textContent = fmt(m.nm_inside_cpa, 2) + " NM";
+  f("minshore").textContent = nmTxt(m.min_shore_nm);
+  f("minukc").textContent = fmt(m.min_ukc_m, 1) + " m";
+  f("legs").textContent = `${m.legs} · ${Math.round(m.max_turn_deg)}°`;
+  f("detour").textContent = "+" + fmt(m.detour_pct, 1) + "%";
+  f("feasnote").innerHTML = m.feasible
+    ? `Clear of land, of water shallower than draught + UKC, and of every ship&rsquo;s hard exclusion zone.`
+    : `<b style="color:var(--bad)">Check:</b> ${m.hard_breaches} hard CPA breaches, ${fmt(m.shallow_nm, 2)} NM shallow.`;
+  const q = routeQuery(); q.set("mode", p.mode);
+  f("csv").href = "/api/route.csv?" + q.toString();
+
+  // comparison table: one column per mode (first plan of each mode)
+  const cols = [];
+  r.plans.forEach((q2, i) => { if (!q2.label.includes("alternative")) cols.push([i, q2]); });
+  const rows = [
+    ["Distance", q2 => q2.metrics.distance_nm, v => fmt(v, 2), -1],
+    ["Ships met", q2 => q2.metrics.obstacles_met, v => v, -1],
+    ["Closest hull", q2 => q2.metrics.min_hull_dist_nm, v => fmt(v, 2), 1],
+    ["Closest envelope", q2 => q2.metrics.min_ship_clear_nm, v => fmt(v, 2), 1],
+    ["NM inside CPA", q2 => q2.metrics.nm_inside_cpa, v => fmt(v, 2), -1],
+    ["Least UKC (m)", q2 => q2.metrics.min_ukc_m, v => fmt(v, 1), 1],
+    ["Closest land", q2 => q2.metrics.min_shore_nm, v => fmt(v, 2), 1],
+  ];
+  f("compare").innerHTML = `<table class="cmp"><tr><th></th>${cols.map(([, q2]) =>
+    `<th style="color:var(${MODE_VARS[q2.mode]})">${MODE_NAMES[q2.mode]}</th>`).join("")}</tr>`
+    + rows.map(([lab, get, show, dir]) => {
+      const vals = cols.map(([, q2]) => get(q2));
+      const best = dir < 0 ? Math.min(...vals) : Math.max(...vals);
+      const allSame = vals.every(v => Math.abs(v - vals[0]) < 1e-6);
+      return `<tr><td>${lab}</td>${vals.map(v => `<td class="${!allSame && Math.abs(v - best) < 1e-6 ? "best" : ""}">${show(v)}</td>`).join("")}</tr>`;
+    }).join("") + `</table>`;
+
+  // encounters
+  f("metcount").textContent = p.encounters.length ? `${m.obstacles_met}` : "none";
+  f("encounters").innerHTML = p.encounters.length ? p.encounters.map((e, i) =>
+    `<button type="button" data-i="${i}"><span class="tag">${esc(e.ship_type)}</span>
+      <span>${esc(e.name || e.id)} <span style="color:var(--ink-3)">${Math.round(e.loa_m)} m${e.area ? " · " + esc(e.area) : ""} · at ${fmt(e.along_nm, 1)} NM</span></span>
+      <span class="d ${e.cpa_nm < e.hard_nm ? "bad" : "warn"}" title="envelope clearance / hull distance / target">
+        ${fmt(e.cpa_nm, 2)} / ${fmt(e.hull_nm, 2)} <span style="color:var(--ink-3)">&lt; ${e.target_nm}</span></span></button>`).join("")
+    : `<p class="note" style="margin:0">No stationary ship comes inside its target passing distance.</p>`;
+  $$("button", f("encounters")).forEach(b => b.onclick = () => goToEncounter(p.encounters[+b.dataset.i]));
+
+  // own-ship card
+  const sl = $("#shipfrac", side);
+  sl.value = Math.round(S.frac * 1000);
+  sl.oninput = () => setFrac(+sl.value / 1000);
+  const tod = $("#tod", side); tod.value = S.tod;
+  tod.onchange = () => { S.tod = tod.value; updateOwn(); };
+  $("#prevclose", side).onclick = () => stepEncounter(-1);
+  $("#nextclose", side).onclick = () => stepEncounter(1);
+  $("#shipexpand", side).onclick = () => openShipView(true);
+  const host = $("#ship3d-inline", side);
+  if (SHIP) {
+    const ph = $(".ship3d-placeholder", host); if (ph) ph.remove();
+    if ($("#shipmodal").hidden) SHIP.attach(host);
+  } else {
+    const io = new IntersectionObserver(es => {
+      if (es.some(e => e.isIntersecting)) { io.disconnect(); loadShip(host); }
+    });
+    io.observe(host);
+  }
+  paintOwnCard(ownState());
+
+  renderSnapshotCard(side, false);
+
+  f("search").innerHTML =
+    `<span class="lbl">Board</span><span></span><span>${S.meta.grid[0]}×${S.meta.grid[1]} cells @ ${S.meta.resolution_deg}°</span>
+     <span class="lbl">Graph</span><span></span><span>${r.network.nodes.toLocaleString()} nodes · ${r.network.edges.toLocaleString()} edges</span>
+     <span class="lbl">A* (this route)</span><span></span><span>${Math.round(p.search.nodes_expanded).toLocaleString()} expanded · ${fmt(p.search.runtime_ms, 0)} ms</span>`;
+  const bb = f("benchbtn");
+  bb.onclick = () => { bb.disabled = true; bb.textContent = "running…"; plan(true); };
+  if (r.benchmark) {
+    const b = r.benchmark;
+    f("bench").innerHTML = `<div class="bd" style="margin-top:9px">
+      <span class="lbl">Dijkstra</span><span></span><span>${Math.round(b.dijkstra.nodes_expanded).toLocaleString()} exp · ${fmt(b.dijkstra.runtime_ms, 0)} ms</span>
+      <span class="lbl">A*</span><span></span><span>${Math.round(b.astar.nodes_expanded).toLocaleString()} exp · ${fmt(b.astar.runtime_ms, 0)} ms</span>
+      <span class="lbl">Cost gap</span><span></span><span>${b.cost_gap < 1e-9 ? "0 (identical)" : b.cost_gap.toExponential(1)}</span></div>
+      <p class="note">A* expands ${fmt(100 * (1 - b.astar.nodes_expanded / b.dijkstra.nodes_expanded), 0)}% fewer nodes
+      and returns the same optimal cost (on the ${r.plans[0].mode} graph).</p>`;
+    bb.remove();
+  }
+}
+
+function renderSnapshotCard(side, standalone) {
+  if (standalone) {
+    const card = document.createElement("div");
+    card.innerHTML = $("#tpl-result").content.querySelectorAll(".card")[4].outerHTML;
+    side.appendChild(card.firstElementChild);
+  }
+  const f = k => $(`[data-f="${k}"]`, side);
+  const sh = S.ships;
+  if (!sh) return;
+  f("snaplabel").innerHTML = `<b>${esc(sh.label)}</b> — ${sh.n} stationary ships`
+    + (sh.captured_utc ? ` · captured ${esc(sh.captured_utc)}` : "")
+    + (sh.notes && sh.notes.length ? `<br>${sh.notes.map(esc).join("<br>")}` : "");
+  f("snapcounts").innerHTML = Object.entries(sh.counts).map(([k, v]) => `<span>${esc(k)} ${v}</span>`).join("");
+  f("types").innerHTML = Object.keys(sh.counts).map(t =>
+    `<label><input type="checkbox" value="${t}" ${S.ignored.has(t) ? "" : "checked"}>
+      <i style="background:${CM.TYPE_COLOURS[t] || "#888"}"></i>${esc(t)}</label>`).join("");
+  $$("input", f("types")).forEach(i => i.onchange = () => {
+    if (i.checked) S.ignored.delete(i.value); else S.ignored.add(i.value);
+    CM.setShips(S.ships); plan();
+  });
+  const sw = $("#swing", side); sw.checked = S.swing;
+  sw.onchange = () => { S.swing = sw.checked; loadShips().then(plan); };
+  const cs = $("#cpascale", side); cs.value = Math.round(S.cpaScale * 100);
+  f("cpascaleval").textContent = S.cpaScale.toFixed(2);
+  cs.oninput = () => { f("cpascaleval").textContent = (+cs.value / 100).toFixed(2); };
+  cs.onchange = () => { S.cpaScale = +cs.value / 100; plan(); };
+  const rules = S.meta.cpa_rules;
+  f("cparules").innerHTML = `<div class="cparules"><span class="h">zone</span><span class="h">hard</span><span class="h">target</span>`
+    + Object.values(rules).map(r => `<span title="${esc(r.context)}">${esc(r.zone)}</span>
+      <span>${fmt(r.hard_nm * S.cpaScale, 2)}</span><span>${fmt(r.target_nm * S.cpaScale, 2)} NM</span>`).join("") + `</div>`;
+  const fi = $("#snapfile", side);
+  fi.onchange = async () => {
+    const file = fi.files[0]; if (!file) return;
+    f("uploadnote").textContent = `Reading ${file.name}…`;
+    try {
+      const text = await file.text();
+      const res = await fetch("/api/snapshot?name=" + encodeURIComponent(file.name), {method: "POST", body: text});
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      S.meta.snapshots[d.key] = d.label;
+      fillSnapshots(); $("#snapshot").value = d.key;
+      S.ignored.clear();
+      await loadShips(); plan();
+    } catch (e) { f("uploadnote").textContent = "Could not use that file: " + e.message; }
+  };
+}
+
+/* =====================================================================
+   server calls
+   ===================================================================== */
+function routeQuery() {
+  const q = new URLSearchParams({
+    origin: $("#origin").value, destination: $("#dest").value, vessel: $("#vessel").value,
+    snapshot: $("#snapshot").value, swing: S.swing ? "1" : "0", cpa_scale: String(S.cpaScale),
+    modes: "shortest,balanced,safest"});
+  if (S.ignored.size && S.ships) {
+    q.set("types", Object.keys(S.ships.counts).filter(t => !S.ignored.has(t)).join(",") || "none");
+  }
+  return q;
+}
+function fillSnapshots() {
+  $("#snapshot").innerHTML = Object.entries(S.meta.snapshots).map(([k, v]) =>
+    `<option value="${esc(k)}">${esc(v)}</option>`).join("");
+}
+async function loadShips() {
+  const res = await fetch(`/api/ships?snapshot=${encodeURIComponent($("#snapshot").value)}&swing=${S.swing ? 1 : 0}`);
+  S.ships = await res.json();
+  CM.setShips(S.ships);
+  S.board = null;
+  if ($("#L-board").checked) loadBoard();
+}
+async function loadBoard() {
+  const q = routeQuery(), b = new URLSearchParams({vessel: q.get("vessel"), snapshot: q.get("snapshot"),
+    swing: q.get("swing"), cpa_scale: q.get("cpa_scale")});
+  if (q.get("types")) b.set("types", q.get("types"));
+  const res = await fetch("/api/board?" + b);
+  S.board = await res.json();
+  CM.setBoard(S.board);
+  boardLegend();
+}
+
+async function loadMeta() {
+  const res = await fetch("/api/meta");
+  S.meta = await res.json();
+  fillPointSelects();
+  $("#origin").value = "EAST"; $("#dest").value = "SGPPT";
+  $("#vessel").innerHTML = S.meta.vessels.map(v => `<option value="${v.code}">${esc(v.name)}</option>`).join("");
+  $("#vessel").value = S.meta.default_vessel;
+  fillSnapshots();
+  $("#snapshot").value = S.meta.default_snapshot;
+  $("#gridinfo").textContent = `board ${S.meta.grid[0]}×${S.meta.grid[1]} @ ${S.meta.resolution_deg}° (${fmt(S.meta.cell_nm[0] * NM, 0)} m) · depth: `
+    + (S.meta.depth_model === "bathymetry_file" ? `bathymetry (${S.meta.depth_source})` : "proxy — add GEBCO for real depths");
+  CM.setMeta(S.meta);
+  boardLegend();
+  await loadShips();
+  await plan();
+}
+
+async function plan(benchmark = false) {
+  if (S.busy) { S.pending = true; return; }
+  if ($("#origin").value === "__pick" || $("#dest").value === "__pick") return;
+  S.busy = true; S.pending = false;
+  const btn = $("#plan"); btn.disabled = true; btn.textContent = "searching…";
+  try {
+    const q = routeQuery();
+    if (benchmark) q.set("benchmark", "1");
+    const res = await fetch("/api/route?" + q);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    S.result = data;
+    const want = data.found ? data.plans.findIndex(p => p.mode === S.wantMode && !p.label.includes("alternative")) : 0;
+    S.sel = Math.max(0, want);
+    renderSide();
+    CM.setResult(S.result, S.sel);
+    if (!benchmark && data.found) CM.fitResult();
+    updateOwn();
+    if ($("#L-board").checked) loadBoard();
+  } catch (err) {
+    $("#side").innerHTML = `<div class="card"><h3>Could not plan</h3><p class="note">${esc(err.message)}</p></div>`;
+  } finally {
+    S.busy = false; btn.disabled = false; btn.textContent = "Find route";
+    if (S.pending) { S.pending = false; plan(); }
+  }
+}
+
+$("#plan").onclick = () => plan();
+$("#vessel").onchange = () => plan();
+$("#snapshot").onchange = async () => { S.ignored.clear(); await loadShips(); plan(); };
+$("#theme").onclick = () => {
+  const dark = isDark();
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+  $("#theme").textContent = dark ? "Night" : "Day";
+  CM.setTheme(!dark); CM.setShips(S.ships); if (S.result) { CM.setResult(S.result, S.sel); renderSide(); updateOwn(); }
+};
+new ResizeObserver(() => CM.invalidate()).observe($("#chart"));
+loadMeta();

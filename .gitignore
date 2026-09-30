@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+data/cache/
+outputs/*.pdf
+*.zip
+.DS_Store
+.venv/
+venv/
+web_static/_test.html

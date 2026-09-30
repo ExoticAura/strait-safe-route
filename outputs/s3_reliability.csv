@@ -1,0 +1,5 @@
+approach,n,feasible_pct,hard_breach_free_pct,zero_obstacles_met_pct,mean_distance_nm,mean_obstacles_met,mean_min_ship_clear_nm
+historical baseline,320,35.9375,35.9375,19.0625,39.63542063684302,15.3625,0.4287375082069336
+planned (shortest),320,100.0,100.0,18.75,38.71474254737045,5.71875,0.7159221710096185
+planned (balanced),320,100.0,100.0,25.0,38.76445832976327,1.8125,0.8093388945884842
+planned (safest),320,100.0,100.0,25.0,38.81031523665088,1.8125,0.7992307459464819

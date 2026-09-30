@@ -1,0 +1,37 @@
+anchorage,name,lat,lon,charted_m,model_m,depth_model,error_m
+ACBTH,Changi Barge Temporary Holding,1.3445,104.04981666666667,5.0,13.8,shore_distance_proxy,8.8
+ACGP,Changi General Purposes,1.3187166666666668,104.07008333333333,18.8,24.8,shore_distance_proxy,6.0
+ACGP,Changi General Purposes,1.33325,104.05258333333333,11.8,22.3,shore_distance_proxy,10.5
+AMOW,Man-of-War,1.3093,104.0737,14.0,27.3,shore_distance_proxy,13.3
+AEBA,Eastern Bunkering A,1.3057666666666667,104.05826666666667,17.5,27.0,shore_distance_proxy,9.5
+AEBB,Eastern Bunkering B,1.2824499999999999,103.9975,29.7,27.1,shore_distance_proxy,-2.599999999999998
+AEPBC,Eastern Petroleum C,1.2992166666666667,103.983,24.7,17.8,shore_distance_proxy,-6.899999999999999
+ASCB,Small Craft B,1.3043666666666667,103.99805,19.4,10.5,shore_distance_proxy,-8.899999999999999
+ASCA,Small Craft A,1.3039166666666666,103.95535,12.4,13.2,shore_distance_proxy,0.7999999999999989
+AEPBB,Eastern Petroleum B,1.2992166666666667,103.94091666666667,16.3,12.2,shore_distance_proxy,-4.100000000000001
+AESPA,Eastern Special Purposes A,1.27975,103.91888333333333,15.7,23.8,shore_distance_proxy,8.100000000000001
+AEBC,Eastern Bunkering C,1.27655,103.92635,23.0,26.6,shore_distance_proxy,3.6000000000000014
+AEHA,Eastern Holding A,1.24775,103.92245,40.0,31.0,shore_distance_proxy,-9.0
+AEPA,Eastern Petroleum A,1.2592833333333333,103.90138333333333,21.5,28.0,shore_distance_proxy,6.5
+AEW,Eastern,1.2551333333333332,103.87235,7.2,19.5,shore_distance_proxy,12.3
+AEW,Eastern,1.2626666666666666,103.88858333333333,10.6,25.0,shore_distance_proxy,14.4
+AEW,Eastern,1.2604833333333334,103.8965,13.0,27.4,shore_distance_proxy,14.399999999999999
+AEHB,Eastern Holding B,1.24575,103.8803,18.1,26.4,shore_distance_proxy,8.299999999999997
+AEHC,Eastern Holding C,1.24955,103.86583333333333,6.9,21.3,shore_distance_proxy,14.4
+AWQI,Western Quarantine & Immigration,1.2164666666666666,103.83028333333333,11.2,4.0,shore_distance_proxy,-7.199999999999999
+AWW,Western,1.25235,103.80481666666667,15.6,12.2,shore_distance_proxy,-3.4000000000000004
+AWPA,Western Petroleum A,1.2382166666666667,103.80368333333334,21.5,21.7,shore_distance_proxy,0.1999999999999993
+AWH,Western Holding,1.2341333333333333,103.78961666666666,21.9,18.9,shore_distance_proxy,-3.0
+AWPB,Western Petroleum B,1.2338666666666667,103.80655,19.2,22.9,shore_distance_proxy,3.6999999999999993
+ARAFR,Raffles Reserved,1.1937,103.7546,11.7,12.2,shore_distance_proxy,0.5
+ARP,Raffles Petroleum,1.2027833333333333,103.7399,11.3,11.0,shore_distance_proxy,-0.3000000000000007
+ASPLU,Selat Pauh,1.2145,103.7266,10.3,4.0,shore_distance_proxy,-6.300000000000001
+ASPLU,Selat Pauh,1.2240833333333334,103.73153333333333,10.3,18.2,shore_distance_proxy,7.899999999999999
+ASPP,Selat Pauh Petroleum,1.21985,103.71608333333333,7.0,13.5,shore_distance_proxy,6.5
+ASPP,Selat Pauh Petroleum,1.2182666666666666,103.71666666666667,7.0,11.0,shore_distance_proxy,4.0
+ASPH,Sudong Petroleum Holding,1.1652833333333334,103.71853333333334,21.6,18.9,shore_distance_proxy,-2.700000000000003
+ASUEX,Sudong Explosive,1.1713,103.71141666666666,19.5,16.9,shore_distance_proxy,-2.6000000000000014
+ASSPU,Sudong Special Purpose,1.184,103.70723333333333,17.7,15.8,shore_distance_proxy,-1.8999999999999986
+ASH,Sudong Holding,1.20085,103.6663,23.2,25.3,shore_distance_proxy,2.1000000000000014
+AVLCC,Very Large Crude Carrier,1.2249833333333333,103.65208333333334,22.6,20.7,shore_distance_proxy,-1.9000000000000021
+AVLCC,Very Large Crude Carrier,1.22685,103.65308333333333,22.6,21.0,shore_distance_proxy,-1.6000000000000014

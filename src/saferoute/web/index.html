@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Strait Safe Route</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{"imports": {"three": "./vendor/three/three.module.js"}}</script>
+</head>
+<body>
+<div class="app">
+
+  <header class="bar">
+    <div class="brand">
+      <b>Strait Safe Route</b>
+      <span id="brandsub">Singapore Strait &harr; Singapore terminals</span>
+    </div>
+    <div class="field"><label for="origin">From</label><select id="origin"></select></div>
+    <button type="button" id="swap" title="Swap from and to">&#8646;</button>
+    <div class="field"><label for="dest">To</label><select id="dest"></select></div>
+    <div class="field"><label for="vessel">Own ship</label><select id="vessel"></select></div>
+    <div class="field"><label for="snapshot">Ships</label><select id="snapshot"></select></div>
+    <button id="plan" class="primary" type="button">Find route</button>
+    <button id="theme" type="button" title="Switch day/night chart">Night</button>
+  </header>
+
+  <div class="main">
+    <div class="chartwrap">
+      <div id="chart" role="application" aria-label="Route chart"></div>
+      <div class="ov layers">
+        <strong>Chart layers</strong>
+        <label><input type="checkbox" id="L-ships" checked> Stationary ships</label>
+        <label><input type="checkbox" id="L-env" checked> Swing circles &amp; CPA rings</label>
+        <label title="The board the router solves: every cell classified as free, land, too shallow, too close to shore, a ship's exclusion zone or inside a ship's target CPA">
+          <input type="checkbox" id="L-board"> Router&rsquo;s board</label>
+        <label><input type="checkbox" id="L-depth"> Depth</label>
+        <label><input type="checkbox" id="L-tss" checked> Traffic separation scheme</label>
+        <label><input type="checkbox" id="L-anch" checked> Anchorages &amp; pilot grounds</label>
+        <label><input type="checkbox" id="L-alt" checked> Other routes</label>
+        <strong style="margin-top:5px">Basemap</strong>
+        <div class="segs" id="basemap" role="radiogroup" aria-label="Basemap">
+          <label><input type="radio" name="basemap" value="simple"><span>Simple</span></label>
+          <label><input type="radio" name="basemap" value="satellite"><span>Satellite</span></label>
+          <label><input type="radio" name="basemap" value="nautical"><span>Nautical</span></label>
+          <label><input type="radio" name="basemap" value="offline"><span>Offline</span></label>
+        </div>
+      </div>
+      <div class="ov zoombtns">
+        <button id="zin" type="button" title="Zoom in">+</button>
+        <button id="zout" type="button" title="Zoom out">&minus;</button>
+        <button id="zfit" type="button" title="Fit route" style="font-size:11px">fit</button>
+      </div>
+      <div class="ov pickhint" id="pickhint" hidden></div>
+      <div class="ov legend-ov" id="boardlegend" hidden></div>
+      <div class="ov status">
+        <span class="chip" id="cursor">&mdash;</span>
+        <span class="chip scalebar"><i id="scaleline"></i><span id="scaletext"></span></span>
+        <span class="chip" id="gridinfo">&mdash;</span>
+      </div>
+    </div>
+
+    <aside class="side" id="side">
+      <div class="card"><h3>Chart</h3><p class="note"><span class="spinner"></span>Building the board&hellip;</p></div>
+    </aside>
+  </div>
+</div>
+
+<template id="tpl-result">
+  <div class="card">
+    <h3>Route <span class="h3note" data-f="odlabel"></span></h3>
+    <div class="modes" data-f="modes" role="tablist" aria-label="Route"></div>
+    <div class="hero-row">
+      <div><div class="hero"><span data-f="distance">&mdash;</span><small>NM</small></div>
+        <div class="sub" data-f="time"></div></div>
+      <div><div class="hero"><span data-f="met">&mdash;</span><small>ships met</small></div>
+        <div class="sub" data-f="metnote"></div></div>
+    </div>
+    <dl class="kv" style="margin:9px 0 0">
+      <dt>Closest ship envelope</dt><dd data-f="minenv">&mdash;</dd>
+      <dt>Closest ship hull</dt><dd data-f="minhull">&mdash;</dd>
+      <dt>Sailed inside a target CPA</dt><dd data-f="inside">&mdash;</dd>
+      <dt>Closest land</dt><dd data-f="minshore">&mdash;</dd>
+      <dt>Least under-keel clearance</dt><dd data-f="minukc">&mdash;</dd>
+      <dt>Legs / largest course change</dt><dd data-f="legs">&mdash;</dd>
+      <dt>Detour vs straight line</dt><dd data-f="detour">&mdash;</dd>
+    </dl>
+    <p class="note" data-f="feasnote"></p>
+    <a class="linkish" data-f="csv" href="#" download>Download waypoints (.csv)</a>
+  </div>
+
+  <div class="card">
+    <h3>Shortest vs safest</h3>
+    <div data-f="compare"></div>
+    <p class="note">Every route obeys the same hard limits (land, depth + UKC, shore clearance,
+      each ship&rsquo;s exclusion zone, TSS direction). They differ only in how far each will
+      go to keep ships outside their <em>target</em> passing distance.</p>
+  </div>
+
+  <div class="card">
+    <h3>Ships met on this route <span class="h3note" data-f="metcount"></span></h3>
+    <div class="enc" data-f="encounters"></div>
+  </div>
+
+  <div class="card" data-f="shipcard">
+    <h3>Ship view <span class="h3note">3D</span></h3>
+    <div class="ship3d" id="ship3d-inline">
+      <button type="button" class="ship3d-expand" id="shipexpand" title="Full screen">&#x2922; Full view</button>
+      <p class="note ship3d-placeholder">Loading 3D view&hellip;</p>
+    </div>
+    <label class="note" style="display:block;margin:8px 0 4px" for="shipfrac">
+      Position along the route <span class="num" id="shipfracval"></span>
+    </label>
+    <input type="range" id="shipfrac" min="0" max="1000" step="1" value="350">
+    <div class="todrow"><label for="tod">Light</label>
+      <select id="tod">
+        <option value="day">Day (10:00)</option><option value="dawn">Dawn (07:00)</option>
+        <option value="dusk">Dusk (19:10)</option><option value="night">Night (23:00)</option>
+        <option value="now">Now (your clock)</option>
+      </select></div>
+    <div class="navbtns">
+      <button type="button" id="prevclose" title="Previous close pass">&#9664; close pass</button>
+      <button type="button" id="nextclose" title="Next close pass">close pass &#9654;</button>
+    </div>
+    <dl class="kv" style="margin-top:6px">
+      <dt>Position</dt><dd data-f="shippos">&mdash;</dd>
+      <dt>Heading</dt><dd data-f="shiphdg">&mdash;</dd>
+    </dl>
+    <div class="sublabel">Nearest ships from here</div>
+    <div class="near" data-f="nearest"></div>
+    <p class="note" data-f="shipnote"></p>
+  </div>
+
+  <div class="card">
+    <h3>Ship snapshot</h3>
+    <p class="note" style="margin-top:0" data-f="snaplabel"></p>
+    <div class="counts" data-f="snapcounts"></div>
+    <div class="sublabel">Treat as obstacles <span>untick a type to ignore it</span></div>
+    <div class="typechecks" data-f="types"></div>
+    <label class="check" style="margin-top:8px">
+      <input type="checkbox" id="swing">
+      <span>Plan round the full swing circle of anchored ships
+        <small>An anchored ship swings round its anchor with the tide. Off = plan round the hull where it is now.</small></span>
+    </label>
+    <label class="note" style="display:block;margin:6px 0 4px" for="cpascale">
+      Passing distances &times; <span class="num" data-f="cpascaleval"></span></label>
+    <input type="range" id="cpascale" min="50" max="200" step="5" value="100">
+    <div data-f="cparules"></div>
+    <div class="sublabel" style="margin-top:12px">Use a real AIS snapshot</div>
+    <label class="uploadbtn"><input type="file" id="snapfile" accept=".csv,text/csv"> Upload AIS CSV&hellip;</label>
+    <p class="note" data-f="uploadnote">Either the app&rsquo;s snapshot format, or a raw AIS extract
+      (MMSI, time, Lat, Lon, SoG, NavStatus&hellip;) &mdash; stationary ships are picked out
+      automatically. To capture one live, run <code>scripts/capture_ais_snapshot.py</code>
+      with a free aisstream.io key.</p>
+  </div>
+
+  <div class="card">
+    <h3>Search</h3>
+    <div class="bd" data-f="search"></div>
+    <button type="button" data-f="benchbtn" style="margin-top:9px;width:100%">Compare Dijkstra vs A*</button>
+    <div data-f="bench"></div>
+  </div>
+</template>
+
+<div class="shipmodal" id="shipmodal" hidden>
+  <div class="shipmodal-inner" role="dialog" aria-modal="true" aria-labelledby="shipmodaltitle">
+    <header>
+      <b id="shipmodaltitle">Ship view</b>
+      <div class="views">
+        <button type="button" data-view="quarter">Quarter</button>
+        <button type="button" data-view="side">Side</button>
+        <button type="button" data-view="bow">Bow</button>
+        <button type="button" data-view="bridge">Bridge</button>
+        <button type="button" data-view="surroundings">Surroundings</button>
+      </div>
+      <button type="button" id="shipclose">Close</button>
+    </header>
+    <div class="ship3d big" id="ship3d-modal"></div>
+    <footer class="note" id="shipmodalnote">Drag to orbit, scroll to zoom. Rings on the water: 0.1, 0.25, 0.5 and 1 NM from your ship.</footer>
+  </div>
+</div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="map.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
