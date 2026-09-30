@@ -44,7 +44,11 @@ function readLayers() {
   for (const [k, id] of Object.entries(LAYER_IDS)) o[k] = !!$("#" + id).checked;
   return o;
 }
-function savedBasemap() { return "offline"; }
+// the chosen base map is remembered in this browser; Chart (the model's own
+// coastline) needs no internet, the others load map tiles
+function savedBasemap() {
+  try { return localStorage.getItem("sr-basemap") || "offline"; } catch (e) { return "offline"; }
+}
 
 const CM = ChartMap.create($("#chart"), {
   basemap: savedBasemap(),
@@ -57,7 +61,7 @@ const CM = ChartMap.create($("#chart"), {
   onMapClick: ll => pickPoint(ll),
   onBasemapFail: name => {
     syncBasemapUI();
-    $("#gridinfo").textContent = `${name} tiles unavailable — showing Offline`;
+    $("#gridinfo").textContent = `${name} map tiles could not load here (this page may block outside map servers; they load on the Railway site) — showing Chart`;
     $("#gridinfo").classList.add("warn");
   },
 });
@@ -66,6 +70,13 @@ const isDark = () => document.documentElement.getAttribute("data-theme") === "da
 CM.setTheme(isDark());
 
 function syncBasemapUI() { $$("#basemap input").forEach(i => { i.checked = i.value === CM.basemap; }); }
+$$("#basemap input").forEach(i => i.onchange = () => {
+  if (!i.checked) return;
+  $("#gridinfo").classList.remove("warn");
+  CM.setBasemap(i.value);
+  try { localStorage.setItem("sr-basemap", i.value); } catch (e) {}
+});
+syncBasemapUI();
 
 Object.values(LAYER_IDS).forEach(id => $("#" + id).onchange = () => {
   CM.setLayers(readLayers());

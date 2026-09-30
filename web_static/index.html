@@ -927,6 +927,8 @@ code{font-family:var(--mono);font-size:.92em;background:var(--panel-2);padding:0
 .playrow{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px;color:var(--ink-2);flex-wrap:wrap}
 .playrow select{font-size:12px;padding:3px 6px}
 #playbtn{min-width:92px}
+.basemaps{display:grid;grid-template-columns:1fr 1fr;gap:0 8px;margin-bottom:2px}
+.basemaps label{white-space:nowrap}
 .todrow{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px;color:var(--ink-2)}
 .todrow select{font-size:12px;padding:3px 6px}
 
@@ -954,7 +956,17 @@ html,body{height:100%}
     <div class="chartwrap">
       <div id="chart" role="application" aria-label="Route chart"></div>
       <div class="ov layers">
-        <strong>Chart layers</strong>
+        <strong>Map</strong>
+        <div id="basemap" class="basemaps" role="radiogroup" aria-label="Base map">
+          <label><input type="radio" name="bm" value="offline"> Chart</label>
+          <label><input type="radio" name="bm" value="satellite"> Satellite</label>
+          <label><input type="radio" name="bm" value="hybrid"> Satellite + labels</label>
+          <label><input type="radio" name="bm" value="streets"> Streets</label>
+          <label><input type="radio" name="bm" value="terrain"> Terrain</label>
+          <label><input type="radio" name="bm" value="nautical"> Nautical</label>
+          <label><input type="radio" name="bm" value="simple"> Light grey</label>
+        </div>
+        <strong style="margin-top:6px">Chart layers</strong>
         <label><input type="checkbox" id="L-ships" checked> Stationary ships</label>
         <label><input type="checkbox" id="L-env" checked> Swing circles &amp; CPA rings</label>
         <label title="The board the router solves: every cell classified as free, land, too shallow, too close to shore, a ship's exclusion zone or inside a ship's target CPA">

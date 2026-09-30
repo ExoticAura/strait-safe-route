@@ -33,7 +33,7 @@ from . import study_area as SA
 from .ais import Voyage
 from .network import NavNetwork
 from .obstacles import Snapshot
-from .routing import plan_route, track_metrics
+from .routing import berthing_nm, plan_route, track_metrics
 
 METRICS = ["distance_nm", "obstacles_met", "min_ship_clear_nm", "hard_breaches",
            "shallow_nm", "min_shore_nm", "nm_inside_cpa"]
@@ -56,7 +56,8 @@ def compare_to_baseline(nets: Dict[Tuple[str, str], NavNetwork],
         any_net = nets.get((v.vessel_class, modes[0]))
         if any_net is None:
             continue
-        bm, _ = track_metrics(any_net, v.track, snap, max_list=0)
+        bm, _ = track_metrics(any_net, v.track, snap, max_list=0,
+                              berthing_nm=berthing_nm(v.origin, v.destination))
         row = dict(voyage_id=v.voyage_id, origin=v.origin, destination=v.destination,
                    vessel_class=v.vessel_class, synthetic=v.synthetic)
         for k in METRICS + ["feasible"]:

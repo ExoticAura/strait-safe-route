@@ -21,7 +21,10 @@ Data provenance
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+import json
+import os
+
+from dataclasses import asdict, dataclass, replace
 from typing import Dict, List, Tuple
 
 # --------------------------------------------------------------------------
@@ -56,10 +59,17 @@ class Port:
     kind: str = "terminal"          # terminal | gateway
     max_draught_m: float = 16.0
     side: str = ""                  # gateways only: "E" or "W"
+    berth_name: str = ""
+    quay_hdg: float = float("nan")  # direction of the quay line, deg true
+    pilot: Tuple[Tuple[float, float], ...] = ()   # pilotage track: board -> berth
 
     @property
     def approach(self) -> Tuple[float, float]:
         return (self.app_lat, self.app_lon)
+
+    @property
+    def berth(self) -> Tuple[float, float]:
+        return (self.lat, self.lon)
 
     def as_dict(self):
         return asdict(self)
@@ -83,6 +93,19 @@ PORTS: Dict[str, Port] = {p.code: p for p in [
     Port("WEST",  "Strait entrance (West)",  1.0920, 103.4160, 1.0920, 103.4160,
          "gateway", 25.0, side="W"),
 ]}
+
+# Berths and pilotage tracks (scripts/build_berths.py -> data/berths.json):
+# each terminal's route ends ON a berth - a point 40 m off the quay line of
+# the modelled coastline - reached by a pilotage track from the nearest water
+# the route-planning board can use. When the file is present the terminal's
+# position becomes the berth and its approach becomes the start of that track.
+_BERTHS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "berths.json")
+if os.path.exists(_BERTHS):
+    for _code, _b in json.load(open(_BERTHS)).items():
+        PORTS[_code] = replace(PORTS[_code], lat=_b["berth"][0], lon=_b["berth"][1],
+                               app_lat=_b["pilot"][0][0], app_lon=_b["pilot"][0][1],
+                               berth_name=_b["name"], quay_hdg=_b["quay_hdg"],
+                               pilot=tuple(tuple(x) for x in _b["pilot"]))
 
 TERMINALS = [c for c, p in PORTS.items() if p.kind == "terminal"]
 GATEWAYS = [c for c, p in PORTS.items() if p.kind == "gateway"]

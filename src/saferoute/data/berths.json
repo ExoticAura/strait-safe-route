@@ -1,0 +1,102 @@
+{
+ "SGTUA": {
+  "name": "Tuas Port - west wharf",
+  "vessel_class": "ULCS",
+  "quay": [
+   1.236197,
+   103.612047
+  ],
+  "quay_hdg": 354.5,
+  "berth": [
+   1.236162,
+   103.611689
+  ],
+  "pilot": [
+   [
+    1.244162,
+    103.598889
+   ],
+   [
+    1.236162,
+    103.611689
+   ]
+  ],
+  "pilot_nm": 0.91
+ },
+ "SGJUR": {
+  "name": "Jurong Port - main wharf",
+  "vessel_class": "PANAMAX",
+  "quay": [
+   1.298787,
+   103.718829
+  ],
+  "quay_hdg": 257.8,
+  "berth": [
+   1.298433,
+   103.718905
+  ],
+  "pilot": [
+   [
+    1.2642,
+    103.740472
+   ],
+   [
+    1.2812,
+    103.740272
+   ],
+   [
+    1.298433,
+    103.718905
+   ]
+  ],
+  "pilot_nm": 2.66
+ },
+ "SGPPT": {
+  "name": "Pasir Panjang - inner basin, east quay",
+  "vessel_class": "PANAMAX",
+  "quay": [
+   1.263389,
+   103.781035
+  ],
+  "quay_hdg": 30.7,
+  "berth": [
+   1.263574,
+   103.780726
+  ],
+  "pilot": [
+   [
+    1.269774,
+    103.751326
+   ],
+   [
+    1.263574,
+    103.780726
+   ]
+  ],
+  "pilot_nm": 1.81
+ },
+ "SGKEP": {
+  "name": "Brani Terminal - north-east wharf",
+  "vessel_class": "PANAMAX",
+  "quay": [
+   1.260583,
+   103.839645
+  ],
+  "quay_hdg": 132.8,
+  "berth": [
+   1.260849,
+   103.839889
+  ],
+  "pilot": [
+   [
+    1.246649,
+    103.860889
+   ],
+   [
+    1.260849,
+    103.839889
+   ]
+  ],
+  "pilot_nm": 1.52
+ }
+}

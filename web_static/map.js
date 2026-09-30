@@ -32,6 +32,18 @@
       labels: `${ESRI}/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}`,
       attribution: `${ESRI_OCEAN} &middot; seamarks &copy; <a href="https://www.openseamap.org">OpenSeaMap</a>`,
       maxNativeZoom: 13, overlay: SEAMARK },
+    hybrid: () => ({
+      url: `${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
+      labels: `${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`,
+      attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics", maxNativeZoom: 18 }),
+    streets: () => ({
+      url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      attribution: "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors",
+      maxNativeZoom: 19 }),
+    terrain: () => ({
+      url: `${ESRI}/World_Topo_Map/MapServer/tile/{z}/{y}/{x}`,
+      attribution: "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, FAO, NOAA, USGS, &copy; OpenStreetMap contributors",
+      maxNativeZoom: 18 }),
     offline: null,
   };
   const MODE_VARS = {shortest: "--rt-c", balanced: "--rt-b", safest: "--rt-a"};
@@ -216,9 +228,22 @@
           + (hit ? `<br><b style="color:var(--bad)">passed at ${hit.cpa_nm.toFixed(2)} NM (target ${hit.target_nm} NM)</b>` : "")
           + (off ? "<br><i>ignored by the router (type unticked)</i>" : "");
         if (st.layers.env && !off) {
+          // An anchored ship swings round its ANCHOR, not round itself: the
+          // circle is centred on the anchor (ahead of the ship, where the
+          // chain leads) and its radius is ship length + cable scope.
           L.circle([s.env[0], s.env[1]], {radius: s.env[2] * NM, weight: hit ? 1.4 : .7,
             color: hit ? css("--bad") : col, opacity: hit ? .9 : .45, fillOpacity: hit ? .10 : .04,
             dashArray: s.status === "anchored" ? "3 3" : null, interactive: false}).addTo(G.env);
+          if (s.status === "anchored" && z >= 12.5 && hav([s.lat, s.lon], [s.env[0], s.env[1]]) > .01) {
+            const h = s.heading_deg * Math.PI / 180, L2 = s.loa_m / 2;
+            const bow = offsetLL(s.lat, s.lon, L2 * Math.sin(h), L2 * Math.cos(h));
+            L.polyline([bow, [s.env[0], s.env[1]]], {color: col, weight: 1, opacity: .7,
+              dashArray: "2 3", interactive: false}).addTo(G.env);
+            L.circleMarker([s.env[0], s.env[1]], {radius: 2.5, weight: 1.2, color: col, fillColor: "#fff",
+              fillOpacity: 1, interactive: true})
+              .bindTooltip(`anchor of <b>${s.name || s.id}</b> &middot; swing circle ${(s.env[2] * NM).toFixed(0)} m`, {sticky: true})
+              .addTo(G.env);
+          }
         }
         const m = big
           ? L.polygon(hullPolygon(s), {color: hit ? css("--bad") : "#fff", weight: 1, fillColor: col,
@@ -267,15 +292,18 @@
       const r = st.result, pts = [];
       st.meta.ports.forEach(p => {
         const on = r && (p.code === r.origin || p.code === r.destination);
-        const m = L.circleMarker([p.lat, p.lon], {radius: on ? 6 : 4, weight: 2, color: "#ffffff",
+        const at = p.kind === "terminal" ? [p.berth_lat, p.berth_lon] : [p.lat, p.lon];
+        if (p.pilot && p.pilot.length > 1)                // pilotage track to the berth
+          L.polyline(p.pilot, {color: css("--ink-2"), weight: 1.5, dashArray: "4 4", opacity: .8,
+                               interactive: false}).addTo(G.ports);
+        const m = L.circleMarker(at, {radius: on ? 6 : 4, weight: 2, color: "#ffffff",
           fillColor: on ? css("--ink") : css("--ink-2"), fillOpacity: 1});
-        const lab = on ? (p.code === r.origin ? "FROM " : "TO ") + p.name : p.name;
+        const nm = p.berth_name ? `${p.name} · berth` : p.name;
+        const lab = on ? (p.code === r.origin ? "FROM " : "TO ") + nm : nm;
         m.bindTooltip(lab, {permanent: true, direction: "right", offset: [8, 0],
                             className: on ? "port-label on" : "port-label"});
         if (opts.onPortClick) m.on("click", () => opts.onPortClick(p.code));
         m.addTo(G.ports);
-        if (p.kind === "terminal") L.polyline([[p.lat, p.lon], [p.berth_lat, p.berth_lon]],
-          {color: css("--ink-3"), weight: 1, dashArray: "1 4", interactive: false}).addTo(G.ports);
       });
       if (r && r.found) {
         const p = r.plans[st.sel];

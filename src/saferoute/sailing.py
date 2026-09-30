@@ -20,10 +20,11 @@ turn radius, and the ship sails the straight legs joined by circular arcs
    UKC, shore distance, a ship's hard CPA, the wrong way down a TSS lane),
    until the arc is legal.
 3. The tightest radius a waypoint may use is 1.5 L at sea (about hard-over
-   rudder) and 1.0 L in the last 3 NM into a terminal (or first 3 NM out),
-   where ships are under pilotage with tugs. A waypoint that needs less is
+   rudder) and 1.0 L in pilotage waters - from the pilot boarding ground the
+   route passes (or 3 NM out, whichever is further) to the berth - where
+   ships are under pilotage with tugs. A waypoint that needs less is
    reported (`too_tight`) and `routing.plan_route` pushes the route off the
-   obstacle and searches again. The first mile from a strait gateway is
+   obstacle and searches again. The first 2 NM from a strait gateway are
    exempt: the gateway is a boundary point the ship reaches already on course.
 
 The ship's head is not quite its course: in a turn the bow points inside the
@@ -58,7 +59,7 @@ class TurnModel:
     lag_loa: float = 0.4             # rudder lag, as distance sailed
     step_m: float = 10.0             # sample spacing of the track
     end_slack_nm: float = 0.25       # berth swing, exempt from the check
-    gateway_free_nm: float = 1.0     # course at a strait gateway is free
+    gateway_free_nm: float = 2.0     # course at a strait gateway is free
 
 
 class _Frame:
@@ -188,10 +189,12 @@ def tolerance_mask(net, legs) -> np.ndarray:
 
 
 def sail(net, legs, model: Optional[TurnModel] = None,
-         pilotage: Tuple[bool, bool] = (False, False)) -> Dict:
+         pilotage: Tuple[bool, bool] = (False, False),
+         quay: Tuple[Optional[float], Optional[float]] = (None, None)) -> Dict:
     """Turn the planned legs into the sailed track. See the module doc.
 
-    `pilotage` says whether the route starts / ends at a terminal.
+    `pilotage` gives the pilotage zone at each end in NM (0 = a strait
+    gateway, no pilot).
     """
     model = model or TurnModel()
     Lship = float(net.vessel.loa_m)
@@ -210,7 +213,10 @@ def sail(net, legs, model: Optional[TurnModel] = None,
     gate = model.gateway_free_nm * M_PER_NM
     floor = []
     for i in range(n):
-        pilot = (pilotage[0] and cum[i] <= pz) or (pilotage[1] and total - cum[i] <= pz)
+        # `pilotage`: length (NM) of the pilotage zone at each end, from the
+        # boarding point to the berth (routing.pilotage_zone_nm); 0 = none
+        pilot = (pilotage[0] and cum[i] <= float(pilotage[0]) * M_PER_NM) or \
+                (pilotage[1] and total - cum[i] <= float(pilotage[1]) * M_PER_NM)
         floor.append((model.tug_radius_loa if pilot else model.min_radius_loa) * Lship)
     R_plan = model.radius_loa * Lship
     R = _fit_radii(L, th, [R_plan] * n)
@@ -224,7 +230,7 @@ def sail(net, legs, model: Optional[TurnModel] = None,
             r *= model.shrink
         R[i] = r
         # a strait gateway is a boundary point, not a place the ship turns: it
-        # arrives there already on course, so turns in its first mile are free
+        # arrives there already on course, so turns in its first 2 NM are free
         at_gate = (not pilotage[0] and cum[i] < gate) or (not pilotage[1] and total - cum[i] < gate)
         if r < floor[i] - 1e-6 and not at_gate:
             too_tight.append(i)
@@ -266,6 +272,22 @@ def sail(net, legs, model: Optional[TurnModel] = None,
         kf[k] = kf[k - 1] + (kap[k] - kf[k - 1]) * min(1.0, (d[k] - d[k - 1]) / lag)
     dmax = math.radians(model.drift_max_deg)
     psi = chi + np.clip(math.radians(model.drift_deg) * R_plan * kf, -dmax, dmax)
+    # alongside: over the last (first) few hundred metres the tugs swing the
+    # ship parallel to the quay, bow the way she was heading
+    swing = min(model.end_slack_nm * M_PER_NM, 2.0 * Lship)
+    for end, q in ((0, quay[0]), (1, quay[1])):
+        if q is None or not np.isfinite(q):
+            continue
+        k_end = -1 if end else 0
+        qa = math.radians(q)
+        # quay line bearing -> course angle convention used here (atan2(x, y))
+        c_end = psi[k_end]
+        cand = [qa, qa + math.pi]
+        tgt = min(cand, key=lambda a: abs(math.atan2(math.sin(a - c_end), math.cos(a - c_end))))
+        dist_end = (d[-1] - d) if end else d
+        w = np.clip(1.0 - dist_end / swing, 0.0, 1.0) ** 2
+        dpsi = np.arctan2(np.sin(tgt - psi), np.cos(tgt - psi))
+        psi = psi + w * dpsi
     lat, lon = fr.ll(xs, ys)
     return dict(lat=lat, lon=lon, x=xs, y=ys, chi=chi, psi=psi, k=kap, kf=kf, d=d,
                 length_m=float(d[-1]), total_m=total, legs=legs, legs_xy=P,

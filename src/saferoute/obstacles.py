@@ -45,7 +45,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import study_area as SA
-from .geo import M_PER_NM, haversine_nm
+from .geo import densify, M_PER_NM, haversine_nm
 
 SNAPSHOT_COLUMNS = ["id", "mmsi", "name", "ship_type", "ais_type", "lat", "lon",
                     "sog_kn", "heading_deg", "nav_status", "status", "loa_m",
@@ -459,7 +459,10 @@ def synthetic_snapshot(grid, seed: int = 20260929, density: float = 1.0,
     """
     rng = np.random.default_rng(seed)
     ships: List[ShipObstacle] = []
-    ap = np.array([p.approach for p in SA.PORTS.values()])
+    # keep the terminal approaches and the pilotage tracks to the berths clear
+    ap = np.array([p.approach for p in SA.PORTS.values()] +
+                  [pt for p in SA.PORTS.values() if len(p.pilot) > 1
+                   for pt in densify(p.pilot, 0.1)])
     e_lat: List[float] = []
     e_lon: List[float] = []
     e_r: List[float] = []

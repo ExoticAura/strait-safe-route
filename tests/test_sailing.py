@@ -65,3 +65,29 @@ def test_csv_has_turn_radii(nets, snap):
     assert p.turn_radii[0] is None and p.turn_radii[-1] is None
     assert any(r is not None for r in p.turn_radii)
     assert len(p.heading) >= 2 and all(0 <= h < 360 for h in p.heading)
+
+
+@pytest.mark.parametrize("code", SA.TERMINALS)
+def test_routes_end_on_the_berth(nets, snap, code):
+    """A terminal route ends on the berth (40 m off the quay line), reached by
+    a pilotage track that stays in the water of the real coastline."""
+    import json
+    from shapely.geometry import LineString, Point, shape
+    from saferoute.seagrid import LAND_GEOJSON
+    land = shape(json.load(open(LAND_GEOJSON))["features"][0]["geometry"])
+    port = SA.PORTS[code]
+    assert len(port.pilot) >= 2 and tuple(port.pilot[-1]) == port.berth
+    assert not land.contains(Point(port.lon, port.lat))
+    assert land.distance(Point(port.lon, port.lat)) < 0.0006          # alongside the quay
+    track = LineString([(lo, la) for la, lo in port.pilot[:-1]] +
+                       [(port.lon + (port.pilot[-2][1] - port.lon) * .05,
+                         port.lat + (port.pilot[-2][0] - port.lat) * .05)])
+    assert not track.intersects(land)
+    for o, d in ((("EAST", code)), ((code, "WEST"))):
+        net = nets["safest"]
+        if net.vessel.draught_m * 1.1 > port.max_draught_m:
+            continue
+        p = R.plan_route(net, o, d, snap)[0]
+        end = p.coords[-1] if d == code else p.coords[0]
+        assert abs(end[0] - port.lat) < 1e-5 and abs(end[1] - port.lon) < 1e-5
+        assert p.metrics["feasible"] and p.metrics["turn_ok"]

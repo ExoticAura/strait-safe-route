@@ -44,7 +44,8 @@ class RoutePlan:
 # --------------------------------------------------------------------------
 def track_metrics(net: NavNetwork, coords: Sequence[Tuple[float, float]],
                   snap: Optional[Snapshot], step_nm: float = 0.02,
-                  max_list: int = 12) -> Tuple[Dict, List[Dict]]:
+                  max_list: int = 12, berthing_nm: Tuple[float, float] = (0.0, 0.0)
+                  ) -> Tuple[Dict, List[Dict]]:
     """Safety and length of a continuous track.
 
     Ship clearance is measured two ways:
@@ -65,8 +66,18 @@ def track_metrics(net: NavNetwork, coords: Sequence[Tuple[float, float]],
     seg = haversine_nm(pts[:-1, 0], pts[:-1, 1], pts[1:, 0], pts[1:, 1]) if len(pts) > 1 else np.zeros(0)
     cum = np.concatenate([[0.0], np.cumsum(seg)])
 
+    # The pilotage legs to the berths are checked against the real coastline
+    # when they are built (scripts/build_berths.py) and lie in the dredged
+    # pocket; on the ~220 m board every quay-side cell counts as land, so the
+    # board's land / depth / shore checks apply to the sea passage only.
+    at_sea = (cum >= berthing_nm[0]) & (cum <= cum[-1] - berthing_nm[1])
+    if not at_sea.any():
+        at_sea[:] = True
+    iy_all, ix_all = iy, ix
+    iy, ix = iy[at_sea], ix[at_sea]
     depth = g.depth_m[iy, ix]
     req = net.req_depth[iy, ix]
+    seg_sea = seg[at_sea[:-1]] if len(seg) else seg
     shore = g.dist_to_land_nm[iy, ix]
     m = dict(
         distance_nm=dist,
@@ -76,12 +87,14 @@ def track_metrics(net: NavNetwork, coords: Sequence[Tuple[float, float]],
         min_shore_nm=float(shore.min()) if len(shore) else float("nan"),
         min_depth_m=float(depth.min()) if len(depth) else float("nan"),
         min_ukc_m=float((depth - v.draught_m).min()) if len(depth) else float("nan"),
-        shallow_nm=float(np.sum((depth < req)[:-1] * seg)) if len(seg) else 0.0,
+        shallow_nm=float(np.sum((depth < req)[:len(seg_sea)] * seg_sea)) if len(seg_sea) else 0.0,
+        berthing_nm=float(sum(berthing_nm)),
         on_land=int(g.land[iy, ix].sum()),
         straight_line_nm=float(haversine_nm(coords[0][0], coords[0][1],
                                             coords[-1][0], coords[-1][1])) if coords else 0.0,
     )
     m["detour_pct"] = 100.0 * (dist / m["straight_line_nm"] - 1.0) if m["straight_line_nm"] > 0 else 0.0
+    iy, ix = iy_all, ix_all               # ships: the whole track, berth legs included
 
     enc: List[Dict] = []
     if snap is not None and len(snap.ships):
@@ -151,6 +164,58 @@ def _pushed_off(net: NavNetwork, base_nav: np.ndarray, blocked: np.ndarray) -> N
     return dataclasses.replace(net, navigable=nav, cost=cost)
 
 
+def _pilot_nm(x) -> float:
+    if isinstance(x, str) and SA.PORTS[x].pilot:
+        return path_length_nm(SA.PORTS[x].pilot)
+    return 0.0
+
+
+def pilotage_zone_nm(legs, origin, destination, board_within_nm: float = 3.0) -> Tuple[float, float]:
+    """How far from each terminal end the ship is under pilotage: from the
+    MPA pilot boarding ground the route passes (within `board_within_nm`) to
+    the berth, and at least the pilotage track plus 3 NM."""
+    pts = np.asarray(densify(legs, 0.05))
+    seg = haversine_nm(pts[:-1, 0], pts[:-1, 1], pts[1:, 0], pts[1:, 1])
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    bg = np.array([(la, lo) for _, _, la, lo in SA.PILOT_BOARDING])
+    near = (haversine_nm(pts[:, None, 0], pts[:, None, 1], bg[None, :, 0], bg[None, :, 1])
+            <= board_within_nm).any(axis=1)
+    out = []
+    for end, x in ((0, origin), (1, destination)):
+        if not (isinstance(x, str) and x in SA.TERMINALS):
+            out.append(0.0)
+            continue
+        base = _pilot_nm(x) + 3.0
+        idx = np.nonzero(near)[0]
+        if len(idx):
+            # the boarding ground nearest this end along the track
+            k = idx.min() if end == 0 else idx.max()
+            reach = cum[k] if end == 0 else cum[-1] - cum[k]
+            # only a boarding ground on this half of the passage counts
+            if reach <= cum[-1] / 2:
+                base = max(base, float(reach))
+        out.append(base)
+    return tuple(out)
+
+
+def berthing_nm(origin, destination) -> Tuple[float, float]:
+    """Length of the pilotage legs at each end (plus the berth swing)."""
+    return (_pilot_nm(origin) + 0.1 if _pilot_nm(origin) else 0.0,
+            _pilot_nm(destination) + 0.1 if _pilot_nm(destination) else 0.0)
+
+
+def with_berths(legs, origin, destination):
+    """Join the route to the berths: the search ends where the board can reach
+    (the start of the pilotage track); the pilotage track takes the ship from
+    there to the quay (study_area / scripts/build_berths.py)."""
+    legs = [tuple(c) for c in legs]
+    if isinstance(origin, str) and SA.PORTS[origin].pilot:
+        legs = [tuple(c) for c in SA.PORTS[origin].pilot[::-1]] + legs[1:]
+    if isinstance(destination, str) and SA.PORTS[destination].pilot:
+        legs = legs[:-1] + [tuple(c) for c in SA.PORTS[destination].pilot]
+    return legs
+
+
 def _search(net, src, dst, algorithm, alternatives):
     if alternatives > 1:
         return k_shortest_paths(net, src, dst, k=alternatives)
@@ -180,18 +245,19 @@ def plan_route(net: NavNetwork, origin, destination, snap: Optional[Snapshot],
         keep[max(0, y - 2):y + 3, max(0, x - 2):x + 3] = True
     # which ends are terminals (sailed under pilotage) rather than strait gateways
     pilot = tuple(isinstance(x, str) and x in SA.TERMINALS for x in (origin, destination))
+    quays = tuple(SA.PORTS[x].quay_hdg if p else None for x, p in zip((origin, destination), pilot))
     t0 = time.perf_counter()
     best = None
     for push in range(max_pushes + 1):
         net_a = net if not blocked.any() else _pushed_off(net, base_nav, blocked)
         results = [r for r in _search(net_a, src, dst, algorithm, alternatives) if r.found]
         if not results:
-            break
+            break                     # closed too much water: keep the best so far
         sailed = []
         total_bad = 0
         for r in results:
-            sm = smooth_path(net_a, net.coords(r.path))
-            tr = sail(net, sm, model, pilotage=pilot)
+            sm = with_berths(smooth_path(net_a, net.coords(r.path)), origin, destination)
+            tr = sail(net, sm, model, pilotage=pilotage_zone_nm(sm, origin, destination), quay=quays)
             sailed.append((r, tr))
             total_bad += len(tr["too_tight"])
         if best is None or total_bad < best[1]:
@@ -213,7 +279,7 @@ def plan_route(net: NavNetwork, origin, destination, snap: Optional[Snapshot],
     sailed, _, pushes = best
     for i, (r, tr) in enumerate(sailed):
         coords, turn = track_summary(tr, SA.PLANNING_SPEED_KN)
-        met, enc = track_metrics(net, coords, snap)
+        met, enc = track_metrics(net, coords, snap, berthing_nm=berthing_nm(origin, destination))
         met.update(turn)
         met["max_turn_deg"] = max(turn_angles_deg(tr["legs"]), default=0.0)
         met["legs"] = max(len(tr["legs"]) - 1, 0)

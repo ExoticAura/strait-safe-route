@@ -192,6 +192,11 @@ def _corridor_route(grid: SeaGrid, origin: SA.Port, destination: SA.Port,
                 legs.append(b)
         legs[-1] = cleaned[-1]
         cleaned = legs
+    # the same pilotage legs to and from the berth as the planned routes
+    if origin.pilot:
+        cleaned = [tuple(c) for c in origin.pilot[::-1]] + list(cleaned[1:])
+    if destination.pilot:
+        cleaned = list(cleaned[:-1]) + [tuple(c) for c in destination.pilot]
     track = densify(cleaned, max_step_nm=0.30)
 
     # Correlated lateral noise: real tracks wander, they do not jitter.

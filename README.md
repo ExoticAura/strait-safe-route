@@ -34,21 +34,21 @@ All figures are measured on the **sailed track** (the legs joined by the
 turns the ship can actually make, see *How the ship turns*), not on the
 search polyline.
 
-* **Safest vs shortest**, averaged over all 16 entrance↔terminal routes: ships
-  met **2.13 vs 6.38** (−67 %), NM sailed inside a target CPA **1.56 vs 4.38**,
-  at the same distance (38.61 vs 38.65 NM). East entrance → Pasir Panjang:
-  **3 ships met instead of 18** for +0.42 NM.
+* **Safest vs shortest**, averaged over all 16 entrance↔berth routes: ships
+  met **1.13 vs 5.00** (−78 %), NM sailed inside a target CPA **0.79 vs 3.88**,
+  for +0.08 NM (40.36 vs 40.28 NM). East entrance → Pasir Panjang berth:
+  **2 ships met instead of 15** for +0.61 NM.
 * **A\* vs Dijkstra**: identical optimal cost on every route (gap 0.0), with
   about half the nodes expanded.
 * **Validation** against 320 baseline voyages (current-practice lane following
-  that knows land and depth but not where ships are anchored): planned routes
-  are **2.5 % shorter** and meet **88 % fewer ships** (safest mode; 15.4 → 1.9
-  per voyage, p < 0.0001); **100 %** of planned routes are free of hard CPA
-  breaches against **36 %** of baseline voyages.
+  that knows land and depth but not where ships are anchored, to the same
+  berths): planned routes are **2.1 % shorter** and meet **93 % fewer ships**
+  (safest mode; 13.3 → 0.9 per voyage, p < 0.0001); **100 %** of planned
+  routes are free of hard CPA breaches against **37 %** of baseline voyages.
 * **Turning**: every route, for every ship class, is sailable: no turn tighter
-  than 1.5 ship lengths at sea (1 L under pilotage near a terminal). 11 of
-  48 Panamax routes had a corner the ship could not make on the first search
-  and were pushed wider; the sailed track is at most 196 m off the planned legs.
+  than 1.5 ship lengths at sea (1 L in pilotage waters). The sailed track is
+  at most 300 m off the planned legs.
+* **Every terminal route ends on a berth** (see *Berths*), not in open water.
 
 The baseline corpus and the ship snapshot are **synthetic** until real AIS is
 dropped in (below) — these are results about the method.
@@ -136,6 +136,31 @@ Types can be ignored with the tick-boxes on the *Ship snapshot* card.
 | Port approaches & fairways | 0.20 NM | 0.50 NM |
 | Berthing basins & narrow water | 0.05 NM | 0.22 NM |
 
+## Berths
+
+Every route to or from a terminal starts or ends **on a berth**, 40 m off the
+quay line (the ship alongside), reached by a pilotage track:
+
+| Terminal | Berth | Pilotage track |
+|---|---|---|
+| Tuas Port | west wharf | 0.9 NM |
+| Jurong Port | main wharf | 2.7 NM |
+| Pasir Panjang | inner basin, east quay | 1.8 NM |
+| Keppel / Brani | Brani north-east wharf | 1.5 NM |
+
+`scripts/build_berths.py` snaps a reference position for each terminal onto
+the modelled (OpenStreetMap) quay line, and draws the pilotage track as a
+shortest mid-channel path on a 22 m raster of the same coastline from the
+berth to open water the ~220 m route board can reach. The track and berth are
+dredged to the terminal's depth; the board's land / shore / depth checks
+apply to the passage outside the pilotage track (alongside, a ship is metres
+from the quay by design), ship clearances apply everywhere. Pilotage waters
+(tug-assisted turns down to 1 ship length) run from the MPA pilot boarding
+ground the route passes to the berth. At the berth the tugs swing the ship
+parallel to the quay. Berth positions are representative (one per terminal,
+on the modelled coastline), not surveyed berth numbers; edit `REFS` in the
+script to move or add them.
+
 ## How the ship turns
 
 The search returns straight legs with sharp corners; a ship cannot turn on the
@@ -178,8 +203,11 @@ grid.
 
 ## The app
 
-* **Chart** — ships drawn at true size and heading when zoomed in, swing
-  circles, ships met highlighted with their closest-approach distance,
+* **Chart** — base map: Chart (offline), Satellite, Satellite + labels,
+  Streets, Terrain, Nautical or Light grey (tile maps need the internet; the
+  published preview page blocks them, the Railway site loads them). Ships
+  drawn at true size and heading when zoomed in, swing circles centred on the
+  anchor with the chain to the bow, ships met highlighted with their closest-approach distance,
   **Router's board** layer (the puzzle the search solves), depth, TSS, MPA
   anchorages and pilot boarding grounds. Basemaps Simple / Satellite / Nautical
   / Offline (vendored Leaflet + the model's own coastline — works with no

@@ -380,7 +380,7 @@
   // in the 3 NM next to a terminal). All metrics are taken on this track.
   const TURN = {radius_loa: 2.5, min_radius_loa: 1.5, tug_radius_loa: 1.0, pilotage_nm: 3.0, shrink: .85,
                 straighten_m: 150, drift_deg: 5, drift_max_deg: 8, lag_loa: .4, step_m: 10,
-                end_slack_nm: .25, gateway_free_nm: 1.0};
+                end_slack_nm: .25, gateway_free_nm: 2.0};
   const KYM = 110574;
   function frame(lat0, lon0) {
     const kx = 111320 * Math.cos(rad(lat0));
@@ -457,7 +457,8 @@
     }
     return true;
   }
-  function sailLegs(net, legsIn, pilotage = [false, false]) {
+  function sailLegs(net, legsIn, pilotage = [0, 0], quay = [null, null]) {
+    // pilotage: pilotage-zone length (NM) at each end, 0 = strait gateway
     const Ls = net.vessel.loa_m;
     const legs = straighten(net, legsIn);
     const fr = frame(legs[0][0], legs[0][1]), P = fr.xy(legs);
@@ -465,7 +466,7 @@
     const cum = [0]; L.forEach(d => cum.push(cum[cum.length - 1] + d));
     const total = cum[n - 1], tol = toleranceMask(net, legs);
     const pz = TURN.pilotage_nm * M_PER_NM, slack = TURN.end_slack_nm * M_PER_NM, gate = TURN.gateway_free_nm * M_PER_NM;
-    const floor = cum.map(c => ((pilotage[0] && c <= pz) || (pilotage[1] && total - c <= pz) ? TURN.tug_radius_loa : TURN.min_radius_loa) * Ls);
+    const floor = cum.map(c => ((pilotage[0] && c <= pilotage[0] * M_PER_NM) || (pilotage[1] && total - c <= pilotage[1] * M_PER_NM) ? TURN.tug_radius_loa : TURN.min_radius_loa) * Ls);
     const Rp = TURN.radius_loa * Ls;
     const R = fitRadii(L, th, new Array(n).fill(Rp));
     const tooTight = [];
@@ -508,6 +509,21 @@
       psi[k] = chi[k] + clip(rad(TURN.drift_deg) * Rp * kf[k], -dmax, dmax);
       [lat[k], lon[k]] = fr.ll(xs[k], ys[k]);
     }
+    // alongside: the tugs swing the ship parallel to the quay over the last
+    // (first) few hundred metres, bow the way she was heading
+    const swingM = Math.min(TURN.end_slack_nm * M_PER_NM, 2 * Ls);
+    [0, 1].forEach(end => {
+      const q = quay[end];
+      if (q == null || !isFinite(q)) return;
+      const cEnd = psi[end ? N - 1 : 0], qa = rad(q);
+      const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+      const tgt = [qa, qa + Math.PI].reduce((b, a) => Math.abs(wrap(a - cEnd)) < Math.abs(wrap(b - cEnd)) ? a : b);
+      for (let k = 0; k < N; k++) {
+        const dEnd = end ? d[N - 1] - d[k] : d[k];
+        const w = Math.max(0, Math.min(1, 1 - dEnd / swingM)) ** 2;
+        if (w > 0) psi[k] += w * wrap(tgt - psi[k]);
+      }
+    });
     // turning figures and the largest offset from the planned legs
     let xt = 0;
     for (let k = 0; k < N; k++) {
@@ -545,7 +561,7 @@
     return out;
   }
 
-  function trackMetrics(net, coords, ships, swing, maxList = 12) {
+  function trackMetrics(net, coords, ships, swing, maxList = 12, berthing = [0, 0]) {
     const g = net.g, v = net.vessel;
     let dist = 0;
     for (let i = 1; i < coords.length; i++) dist += hav(coords[i - 1][0], coords[i - 1][1], coords[i][0], coords[i][1]);
@@ -554,7 +570,11 @@
     const seg = [], cum = [0];
     for (let i = 1; i < pts.length; i++) { const s = hav(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]); seg.push(s); cum.push(cum[i - 1] + s); }
     let minShore = Infinity, minDepth = Infinity, shallow = 0, onLand = 0;
+    // the pilotage legs to the berths are checked against the real coastline
+    // when built; the board's land / depth / shore checks cover the passage
+    const total = cum[cum.length - 1];
     ks.forEach((k, i) => {
+      if (cum[i] < berthing[0] || cum[i] > total - berthing[1]) return;
       minShore = Math.min(minShore, g.dist[k]); minDepth = Math.min(minDepth, g.depth[k]);
       if (g.land[k]) onLand++;
       if (i < seg.length && g.depth[k] < net.reqD[k]) shallow += seg[i];
@@ -644,7 +664,40 @@
     const g = net.g, a = pointOf(net.data, origin), b = pointOf(net.data, dest);
     const src = nodeAt(net, a[0], a[1]), dst = nodeAt(net, b[0], b[1]);
     const terminals = (net.data.meta.terminals || ["SGTUA", "SGJUR", "SGPPT", "SGKEP"]);
-    const pilot = [origin, dest].map(x => typeof x === "string" && terminals.includes(x));
+    const portOf = x => typeof x === "string" ? net.data.meta.ports.find(q => q.code === x) : null;
+    const pilotNm = x => { const p = portOf(x); if (!p || !p.pilot || p.pilot.length < 2) return 0;
+      let s = 0; for (let i = 1; i < p.pilot.length; i++) s += hav(p.pilot[i - 1][0], p.pilot[i - 1][1], p.pilot[i][0], p.pilot[i][1]); return s; };
+    // join the route to the berths: the search ends where the board can reach
+    // (the start of the pilotage track); the track takes the ship to the quay
+    const withBerths = legs => {
+      let L = legs.map(c => c.slice());
+      const po = portOf(origin), pd = portOf(dest);
+      if (po && po.pilot && po.pilot.length > 1) L = po.pilot.slice().reverse().map(c => c.slice()).concat(L.slice(1));
+      if (pd && pd.pilot && pd.pilot.length > 1) L = L.slice(0, -1).concat(pd.pilot.map(c => c.slice()));
+      return L;
+    };
+    // pilotage zone (NM) at each terminal end: from the MPA boarding ground the
+    // route passes within 3 NM of, and at least the pilotage track + 3 NM
+    const pilotZone = legs => {
+      const pts = densify(legs, .05), cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + hav(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]));
+      const bg = net.data.meta.pilot_boarding || [];
+      const near = pts.map(p => bg.some(b => hav(p[0], p[1], b.lat, b.lon) <= 3));
+      const tot = cum[cum.length - 1];
+      return [origin, dest].map((x, end) => {
+        if (!(typeof x === "string" && terminals.includes(x))) return 0;
+        let base = pilotNm(x) + 3;
+        const idx = near.map((v, i) => v ? i : -1).filter(i => i >= 0);
+        if (idx.length) {
+          const k = end ? Math.max(...idx) : Math.min(...idx);
+          const reach = end ? tot - cum[k] : cum[k];
+          if (reach <= tot / 2) base = Math.max(base, reach);
+        }
+        return base;
+      });
+    };
+    const quays = [origin, dest].map(x => { const p = portOf(x); return p && p.kind === "terminal" ? p.quay_hdg : null; });
+    const berthing = [origin, dest].map(x => pilotNm(x) ? pilotNm(x) + .1 : 0);
     const blocked = new Uint8Array(g.n), keep = new Uint8Array(g.n);
     for (const k of [src, dst]) {
       const y = (k / g.nx) | 0, x = k % g.nx;
@@ -665,8 +718,8 @@
       }
       const r = search(netA, src, dst, algorithm !== "dijkstra");
       if (!r.found) break;
-      const raw = coordsOf(net, r.path), sm = smooth(netA, raw);
-      const tr = sailLegs(net, sm, pilot);
+      const raw = coordsOf(net, r.path), sm = withBerths(smooth(netA, raw));
+      const tr = sailLegs(net, sm, pilotZone(sm), quays);
       if (!best || tr.tooTight.length < best.tr.tooTight.length) best = {r, raw, tr, push};
       if (!tr.tooTight.length) break;
       for (const i of tr.tooTight) {
@@ -683,8 +736,9 @@
     for (let k = 0; k < tr.lat.length; k += 3) coords.push([tr.lat[k], tr.lon[k]]);
     const last = tr.lat.length - 1;
     if (last % 3) coords.push([tr.lat[last], tr.lon[last]]);
-    const [m, enc] = trackMetrics(net, coords, ships, swing);
+    const [m, enc] = trackMetrics(net, coords, ships, swing, 12, berthing);
     Object.assign(m, tr.summary);
+    m.berthing_nm = berthing[0] + berthing[1];
     const ta = turnAngles(tr.legs);
     m.max_turn_deg = ta.length ? Math.max(...ta) : 0;
     m.legs = tr.legs.length - 1;

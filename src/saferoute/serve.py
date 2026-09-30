@@ -89,7 +89,9 @@ def meta_payload() -> Dict[str, Any]:
         depth=viz.depth_payload(g, stride=2),
         ports=[dict(code=c, name=p.name, lat=p.app_lat, lon=p.app_lon,
                     berth_lat=p.lat, berth_lon=p.lon, kind=p.kind,
-                    max_draught_m=p.max_draught_m) for c, p in SA.PORTS.items()],
+                    max_draught_m=p.max_draught_m, berth_name=p.berth_name,
+                    quay_hdg=None if p.kind != "terminal" else p.quay_hdg,
+                    pilot=[list(x) for x in p.pilot]) for c, p in SA.PORTS.items()],
         anchorages=[dict(code=c, name=n, charted_m=d, lat=la, lon=lo,
                          use=SA.anchorage_use(c)) for c, n, d, la, lo in SA.ANCHORAGE_POINTS],
         pilot_boarding=[dict(code=c, name=n, lat=la, lon=lo)
