@@ -18,9 +18,12 @@
  *   upperworks accommodation block with window rows (lit at night), bridge
  *             wings, mast with radar scanners, funnel, lifeboat, navigation
  *             lights (red to port, green to starboard).
- *   sea / sky three.js Water and Sky shaders; the wave normal map is
- *             generated in code. Bow wave and wake scale with speed; at
- *             anchor the wake disappears and a chain runs from the hawse.
+ *   sea       ocean.js: Gerstner waves from a JONSWAP spectrum for the
+ *             Strait's short wind chop, physically based shading (Fresnel,
+ *             turbid green-grey water, whitecaps); ships heave, pitch and
+ *             roll on the same waves. Sky: three.js Sky shader. Bow wave and
+ *             wake scale with speed; at anchor the wake disappears and a
+ *             chain runs from the hawse.
  *
  * Sun position is an equinox approximation from local solar time and
  * latitude - good enough for day/night and lighting direction, not an
@@ -29,7 +32,7 @@
  */
 import * as THREE from "three";
 import {Sky} from "./vendor/three/addons/Sky.js";
-import {Water} from "./vendor/three/addons/Water.js";
+import {createOcean} from "./ocean.js";
 import {OrbitControls} from "./vendor/three/addons/OrbitControls.js";
 
 /* ------------------------------------------------------------------ utils */
@@ -524,19 +527,22 @@ function ribbon(pts, widths, fade, uvLen) {
   g.setAttribute("color", new THREE.Float32BufferAttribute(c, 3));
   g.setIndex(ii); return g;
 }
-function foamMaterial(foam) {
+function foamMaterial(foam, sea) {
   // Additive white, modulated by the foam texture and the per-vertex fade.
   return new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
-    uniforms: {map: {value: foam}, offset: {value: 0}, opacity: {value: .8}, bend: {value: 0}, xs: {value: 0}},
+    uniforms: Object.assign({map: {value: foam}, offset: {value: 0}, opacity: {value: .8}, bend: {value: 0}, xs: {value: 0}}, sea.uniforms),
     polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
     vertexShader: `#include <common>
       #include <logdepthbuf_pars_vertex>
+      ${sea.glsl}
       attribute vec3 color; varying vec2 vUv; varying float vF; uniform float bend; uniform float xs;
       void main(){ vUv = uv; vF = color.r;
         // in a turn the wake trails round the arc the stern has just sailed
         vec3 p = position; float d = max(0., xs - p.x); p.z += bend * d * d * .5;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.);
+        // ...and rides the waves just above the surface
+        vec4 wp = modelMatrix * vec4(p, 1.); wp.y = seaHeight(wp.xz) + .12;
+        gl_Position = projectionMatrix * viewMatrix * wp;
         #include <logdepthbuf_vertex>
       }`,
     fragmentShader: `#include <common>
@@ -550,7 +556,7 @@ function foamMaterial(foam) {
         gl_FragColor = vec4(vec3(1.), 1.) * f * vF * opacity * (.35 + .65 * edge); }`,
   });
 }
-function buildWake(H, foam) {
+function buildWake(H, foam, sea) {
   const g = new THREE.Group(), mats = [];
   const xS = -H.L / 2, n = 60;
   // turbulent propeller wash straight astern
@@ -559,7 +565,7 @@ function buildWake(H, foam) {
     const t = i / n; wash.push([xS + 4 - t * H.L * 2.2, 0]);
     ww.push(H.B * (.28 + 1.1 * Math.pow(t, .7))); wf.push(Math.pow(1 - t, 1.3));
   }
-  const m1 = foamMaterial(foam); mats.push(m1);
+  const m1 = foamMaterial(foam, sea); mats.push(m1);
   const setXs = m => { m.uniforms.xs.value = xS; };
   g.add(new THREE.Mesh(ribbon(wash, ww, wf, 60), m1));
   // Kelvin arms: two thin lines diverging at about 19.5 degrees from the stern
@@ -571,7 +577,7 @@ function buildWake(H, foam) {
       arm.push([xS + H.L * .25 - d * Math.cos(ang), side * (H.B * .5 + d * Math.sin(ang))]);
       aw.push(2 + 9 * t); af.push(Math.pow(1 - t, 1.1) * .8);
     }
-    const m = foamMaterial(foam); mats.push(m);
+    const m = foamMaterial(foam, sea); mats.push(m);
     g.add(new THREE.Mesh(ribbon(arm, aw, af, 50), m));
   }
   // bow wave hugging the waterline from the stem aft
@@ -583,7 +589,7 @@ function buildWake(H, foam) {
       const out = 1.5 + 6 * t;
       pts.push([x, side * (half + out * .55)]); w.push(out * .55); f.push(Math.pow(1 - t, .7));
     }
-    const m = foamMaterial(foam); mats.push(m);
+    const m = foamMaterial(foam, sea); mats.push(m);
     g.add(new THREE.Mesh(ribbon(pts, w, f, 25), m));
   }
   g.children.forEach(c => { c.renderOrder = 2; });
@@ -736,11 +742,9 @@ export function createShipView(container) {
                                  depthWrite: false, fog: false}));
   dome.renderOrder = -1; scene.add(dome);
 
-  const water = new Water(new THREE.PlaneGeometry(240000, 240000), {
-    textureWidth: 512, textureHeight: 512, waterNormals: waterNormals(),
-    sunDirection: new THREE.Vector3(), sunColor: 0xffffff, waterColor: 0x0b3a52,
-    distortionScale: 3.0, fog: false});
-  water.rotation.x = -Math.PI / 2; water.material.uniforms.size.value = 1.6;   // added to the world below
+  // the sea (ocean.js): wave-displaced, fixed to the Earth, follows the view
+  const ocean = createOcean({detailNormals: waterNormals()});
+  scene.add(ocean.mesh);
 
   const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -.0004; sun.shadow.normalBias = .6;
@@ -768,6 +772,7 @@ export function createShipView(container) {
   let P = {sog: 12, heading: 90, turn: 0, lat: 1.2, lon: 103.8, utcHour: 4, anchored: false};
   let visible = true, current = "quarter";
   const rings = buildRings(); scene.add(rings);
+  rings.children.forEach(c => { if (c.isMesh) ocean.floatMaterial(c.material, .6); });
 
   /* ------------------------------------------------------------ the world
      Everything that is fixed to the Earth - land, buildings, port cranes and
@@ -779,9 +784,7 @@ export function createShipView(container) {
   const KX = 111320 * Math.cos(O.lat * Math.PI / 180), KY = 110574;
   const toLocal = (lat, lon) => [(lon - O.lon) * KX, -(lat - O.lat) * KY];
   const world = new THREE.Group(); scene.add(world);
-  // the sea belongs to the Earth, not to our ship: its wave pattern stays put
-  // and the ship sails across it (in the ship's frame it streamed along with us)
-  world.add(water);
+  const own = new THREE.Group(); scene.add(own);
   const shipsG = new THREE.Group(); world.add(shipsG);
   const labelsG = new THREE.Group(); scene.add(labelsG);
   const templates = new Map();          // spec.code -> built ship (shared geometry)
@@ -790,14 +793,25 @@ export function createShipView(container) {
   const tiles = new Map();              // "i_j" -> {state, mesh}
   const fogMat = [];                    // materials that fade with distance
 
+  // The scene is north-up and fixed to the Earth: the sea, land and other
+  // ships never turn. Only our ship (the `own` group: hull, wake, chain)
+  // turns to its heading; the world just slides under it so our ship stays
+  // at the origin. On the bridge the eye turns with the ship, as it would.
+  let lastTh = null;
   function setPose() {
-    const th = (P.heading - 90) * Math.PI / 180;
-    world.rotation.set(0, th, 0);
+    const th = -(P.heading - 90) * Math.PI / 180;      // model bow (+x) -> compass heading
+    own.rotation.set(0, th, 0);
     const [x, z] = toLocal(P.lat, P.lon);
-    const c = Math.cos(th), s = Math.sin(th);
-    world.position.set(-(x * c + z * s), 0, -(-x * s + z * c));
+    world.rotation.set(0, 0, 0);
+    world.position.set(-x, 0, -z);
     world.updateMatrixWorld(true);
+    if (lastTh !== null && current === "bridge" && th !== lastTh) {
+      const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), th - lastTh);
+      camera.position.applyQuaternion(q); controls.target.applyQuaternion(q); controls.update();
+    }
+    lastTh = th;
   }
+  const toScene = v => v.applyAxisAngle(new THREE.Vector3(0, 1, 0), own.rotation.y);
 
   // ---- land: the same coastline the router uses, as a low slab
   // Its top is draped with a land-use texture painted from OpenStreetMap
@@ -989,8 +1003,10 @@ export function createShipView(container) {
     const halo = new THREE.Mesh(new THREE.RingGeometry(rr, rr + Math.max(4, rr * .08), 48),
       new THREE.MeshBasicMaterial({color: 0xffffff, transparent: true, opacity: .7, side: THREE.DoubleSide,
                                    depthWrite: false, fog: false}));
-    halo.rotation.x = -Math.PI / 2; halo.position.set(x, 1.0, z); halo.renderOrder = 3; shipsG.add(halo);
-    placed.set(n.id, {obj, halo, n, tpl});
+    ocean.floatMaterial(halo.material, .8);
+    halo.rotation.x = -Math.PI / 2; halo.position.set(x, 0, z); halo.renderOrder = 3; shipsG.add(halo);
+    obj.rotation.order = "YZX";                          // heading, then pitch, then roll
+    placed.set(n.id, {obj, halo, n, tpl, m: motionState()});
   }
   function updateShipsNear() {
     if (!ship) return;
@@ -1067,6 +1083,7 @@ export function createShipView(container) {
         tgt.set(L * 3, ship.H.D, 0);
         camera.position.set(-L * .32, ship.H.D * 1.55 + 6, ship.H.B * .45);
       }
+      toScene(tgt); toScene(camera.position);
       controls.target.copy(tgt);
       controls.minDistance = 5; controls.maxDistance = 30000;
       camera.near = 2; camera.far = 200000; camera.updateProjectionMatrix(); controls.update();
@@ -1075,13 +1092,13 @@ export function createShipView(container) {
       return;
     }
     const dirs = {quarter: [.55, .2, .81], side: [.02, .1, 1], bow: [.93, .16, .33], aerial: [.25, .82, .52]};
-    const d = new THREE.Vector3(...(dirs[preset] || dirs.quarter)).normalize();
+    const d = toScene(new THREE.Vector3(...(dirs[preset] || dirs.quarter)).normalize());
     // Fit the ship's bounding box to ~86% of the frame: project its corners
     // and rescale the camera distance until the widest one sits at the margin.
     const H0 = ship.H, top = H0.D * 1.9 - H0.T;
     const corners = [];
     for (const x of [-L / 2, L / 2]) for (const y of [-H0.T * .3, top]) for (const z of [-H0.B / 2, H0.B / 2])
-      corners.push(new THREE.Vector3(x, y, z));
+      corners.push(toScene(new THREE.Vector3(x, y, z)));
     let dist = L;
     for (let it = 0; it < 6; it++) {
       camera.position.copy(tgt).addScaledVector(d, dist); camera.lookAt(tgt); camera.updateMatrixWorld();
@@ -1099,10 +1116,10 @@ export function createShipView(container) {
   }
 
   function setVessel(v) {
-    if (ship) { scene.remove(ship.root); if (wake) scene.remove(wake.group); if (chain) scene.remove(chain); }
-    ship = buildShip(v); scene.add(ship.root);
-    wake = buildWake(ship.H, foam); scene.add(wake.group);
-    chain = buildAnchorChain(ship.H); chain.position.y = -ship.H.T; scene.add(chain);
+    if (ship) { own.remove(ship.root); if (wake) own.remove(wake.group); if (chain) own.remove(chain); }
+    ship = buildShip(v); own.add(ship.root);
+    wake = buildWake(ship.H, foam, ocean); own.add(wake.group);
+    chain = buildAnchorChain(ship.H); chain.position.y = -ship.H.T; own.add(chain);
     vesselCode = v.code; frame("quarter");
   }
 
@@ -1111,13 +1128,11 @@ export function createShipView(container) {
     if (!ship) return;
     const solar = ((P.utcHour + P.lon / 15) % 24 + 24) % 24;
     const {el, az} = sunFromTime(solar, P.lat);
-    // scene frame: +x = bow. Rotate the compass azimuth into the ship's frame.
-    const rel = az - P.heading * Math.PI / 180;
+    // scene frame is north-up: +x = east, -z = north
+    const rel = az - Math.PI / 2;
     const dir = new THREE.Vector3(Math.cos(rel) * Math.cos(el), Math.sin(el), Math.sin(rel) * Math.cos(el));
     su.sunPosition.value.copy(dir);
     const day = smooth(-.12, .12, el);                 // 0 night .. 1 day
-    // the sea glitters with the sun by day and the moon by night
-    water.material.uniforms.sunDirection.value.copy(day > .5 ? dir : moonDir).normalize();
     dome.material.opacity = 1 - smooth(-.15, .04, el);
     moon.position.copy(moonDir).multiplyScalar(ship.H.L * 2);
     moon.intensity = .9 * (1 - day);
@@ -1128,14 +1143,13 @@ export function createShipView(container) {
     hemi.intensity = .3 + .3 * day;
     hemi.color.setHSL(.61, lerp(.55, .45, day), lerp(.32, .72, day));
     renderer.toneMappingExposure = lerp(.62, .42, day);
-    water.material.uniforms.waterColor.value.setHSL(.56, .75, lerp(.02, .09, day));
-    water.material.uniforms.sunColor.value.setRGB(lerp(.28, 1, day), lerp(.32, 1, day), lerp(.42, 1, day));
+    ocean.setDay(day);
     stars.material.opacity = 1 - smooth(-.2, .02, el);
     const lit = 1 - smooth(-.08, .1, el);
     ship.lights.forEach(m => { m.emissiveIntensity = (m.map ? 1.3 : 2.5) * lit; });
     // environment map for reflections: expensive, so only when the light has
     // really changed (time of day, or the ship has turned a lot)
-    const ek = `${Math.round(P.utcHour * 4)}:${Math.round(P.heading / 30)}:${vesselCode}`;
+    const ek = `${Math.round(P.utcHour * 4)}:${vesselCode}`;
     if (ek !== envKey) {
       envKey = ek;
       if (envRT) envRT.dispose();
@@ -1145,16 +1159,46 @@ export function createShipView(container) {
     scene.environmentIntensity = lerp(.08, 1, day);
     scene.fog.color.setHSL(.57, .22, lerp(.03, .72, day));
     bMat.emissiveIntensity = .22 * lit;
-    // sea state from speed
     const anchored = P.anchored || P.sog < .5;
-    water.material.uniforms.distortionScale.value = anchored ? 1.8 : 3.0;
     wake.group.visible = !anchored; chain.visible = anchored;
     const k = clamp(P.sog / 20, 0, 1);
     wake.mats.forEach(m => { m.uniforms.opacity.value = (.35 + 1.0 * k) * lerp(.4, 1, day); });
   }
 
   const clock = new THREE.Clock();
-  let heel = 0;
+  let heel = 0, seaKey = "moderate";
+
+  /* Buoyancy: sample the drawn sea at points along the waterline, and let the
+     hull follow the mean height (heave), the bow-stern slope (pitch) and the
+     port-starboard slope (roll) through a damped spring with the ship's
+     natural periods, so a big ship averages out short chop and moves slowly.
+     (x0, z0): ship centre in the scene; (c, s): cos / sin of its yaw. */
+  const motionState = () => ({h: 0, vh: 0, p: 0, vp: 0, r: 0, vr: 0});
+  const ownMotion = motionState();
+  const XS = [-.45, -.2, .05, .3, .45], ZS = [-.42, .42];
+  function ride(m, H, x0, z0, c, s, dt) {
+    let sum = 0, n = 0, bow = 0, stern = 0, port = 0, stbd = 0;
+    for (const fx of XS) for (const fz of ZS) {
+      const lx = fx * H.L, lz = fz * H.B;
+      // ship frame (bow +x, starboard +z) -> scene, yaw about +y
+      const h = ocean.heightAt(x0 + lx * c + lz * s, z0 - lx * s + lz * c);
+      sum += h; n++;
+      if (fx > .2) bow += h; if (fx < -.1) stern += h;
+      if (fz > 0) stbd += h; else port += h;
+    }
+    const tgtH = sum / n;
+    const tgtP = Math.atan2(bow / 4 - stern / 4, .75 * H.L);
+    const tgtR = -Math.atan2(stbd / 5 - port / 5, .84 * H.B);
+    const spring = (x, v, tgt, T) => {                  // damped spring, zeta 0.6
+      const w = 2 * Math.PI / T;
+      v += (w * w * (tgt - x) - 1.2 * w * v) * dt;
+      return [x + v * dt, v];
+    };
+    const Tl = Math.sqrt(H.L);                          // natural periods scale with size
+    [m.h, m.vh] = spring(m.h, m.vh, tgtH, .55 * Tl);
+    [m.p, m.vp] = spring(m.p, m.vp, tgtP, .5 * Tl);
+    [m.r, m.vr] = spring(m.r, m.vr, tgtR, 1.1 * Tl);
+  }
   let onScreen = true, last = 0;
   const io = new IntersectionObserver(es => { onScreen = es.some(e => e.isIntersecting); });
   function tick(now) {
@@ -1163,15 +1207,24 @@ export function createShipView(container) {
     if (!visible || !onScreen || !ship || now - last < 32) return;
     last = now;
     const dt = Math.min(clock.getDelta(), .05), t = clock.elapsedTime;
-    water.material.uniforms.time.value += dt * (P.anchored ? .35 : .6);
     const anchored = P.anchored || P.sog < .5;
-    const amp = anchored ? .35 : .6;
-    ship.root.rotation.z = Math.sin(t * .45) * .004 * amp * 3;      // pitch (about the beam axis)
-    // heel outward in a turn (up to ~3 degrees at the tightest turning circle)
+    // the sea: waves fixed to the Earth (scene origin = our ship), fine grid
+    // under the point the camera looks at
+    ocean.update(dt, -world.position.x, -world.position.z, controls.target);
+    // our ship rides the waves; heel outward in a turn (up to ~3 degrees)
     const turnFrac = clamp((P.turn || 0) * 2.5 * ship.H.L, -1, 1);
     heel += (-turnFrac * .052 - heel) * Math.min(1, dt * .8);
-    ship.root.rotation.x = Math.sin(t * .31 + 1) * .012 * amp + heel;      // roll
-    ship.root.position.y = -ship.H.T + Math.sin(t * .6) * .25 * amp;
+    const c = Math.cos(own.rotation.y), s = Math.sin(own.rotation.y);
+    ride(ownMotion, ship.H, 0, 0, c, s, dt);
+    ship.root.position.y = -ship.H.T + ownMotion.h;
+    ship.root.rotation.z = ownMotion.p;
+    ship.root.rotation.x = ownMotion.r + heel;
+    placed.forEach(v => {
+      const o = v.obj, yaw = o.rotation.y;
+      ride(v.m, v.tpl.H, o.position.x + world.position.x, o.position.z + world.position.z,
+           Math.cos(yaw), Math.sin(yaw), dt);
+      o.position.y = -v.tpl.H.T + v.m.h; o.rotation.z = v.m.p; o.rotation.x = v.m.r;
+    });
     if (!anchored) {
       const off = t * P.sog * .012;
       wake.mats.forEach(m => { m.uniforms.offset.value = off; m.uniforms.bend.value = P.turn || 0; });
@@ -1202,6 +1255,7 @@ export function createShipView(container) {
     setParams(p) {
       const moved = p.lat !== undefined && (p.lat !== P.lat || p.lon !== P.lon || p.heading !== P.heading);
       P = Object.assign({}, P, p);
+      if (p.sea && p.sea !== seaKey) { seaKey = p.sea; ocean.setSea(p.sea); }
       if (p.vessel && p.vessel.code !== vesselCode) { setVessel(p.vessel); placed.forEach(v => { shipsG.remove(v.obj); shipsG.remove(v.halo); }); placed.clear(); labelKey = ""; }
       setPose();
       if (moved || p.vessel) { updateShipsNear(); updateTiles(); }
@@ -1219,6 +1273,7 @@ export function createShipView(container) {
         updateShipsNear();
       }
     },
+    get sea() { return ocean.info; },
     tileStats() { let r = 0; tiles.forEach(t => { if (t.state === "ready") r++; }); return {loaded: r, requested: tiles.size}; },
     attach,
     view(preset) { frame(preset); },

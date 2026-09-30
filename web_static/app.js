@@ -17,7 +17,7 @@ const NM = 1852;
 const S = {
   meta: null, ships: null, result: null, sel: 0, board: null, busy: false, pending: false,
   frac: 0.35, ignored: new Set(), playing: false, speed: 60, swing: true, cpaScale: 1.0, picking: null,
-  custom: {origin: null, dest: null}, wantMode: "safest", tod: "day",
+  custom: {origin: null, dest: null}, wantMode: "safest", tod: "day", sea: "moderate",
 };
 
 const fmt = (v, d = 1) => (v == null || !isFinite(v)) ? "—"
@@ -190,7 +190,7 @@ function updateOwn(fromPlay) {
     // Singapore local time (UTC+8) for the fixed presets
     const TOD = {day: 2, dawn: 23, dusk: 11.17, night: 15};
     const utcHour = S.tod === "now" ? d.getUTCHours() + d.getUTCMinutes() / 60 : TOD[S.tod];
-    SHIP.setParams({vessel: st.vessel, sog: S.meta.planning_speed_kn, heading: st.pt.heading, turn: st.pt.turn,
+    SHIP.setParams({vessel: st.vessel, sog: S.meta.planning_speed_kn, heading: st.pt.heading, turn: st.pt.turn, sea: S.sea,
       lat: st.pt.lat, lon: st.pt.lon, utcHour, playing: !!fromPlay,
       nearest: st.near.filter(o => o.centre_nm < 3).map(o => ({id: o.s.id, hull_nm: o.hull_nm, cls: o.cls,
         centre_m: o.centre_nm * NM, loa_m: o.s.loa_m, ship_type: o.s.ship_type}))});
@@ -402,6 +402,8 @@ function renderSide() {
   spd.onchange = () => { S.speed = +spd.value; };
   const tod = $("#tod", side); tod.value = S.tod;
   tod.onchange = () => { S.tod = tod.value; updateOwn(); };
+  const sea = $("#sea", side); sea.value = S.sea;
+  sea.onchange = () => { S.sea = sea.value; updateOwn(); };
   $("#prevclose", side).onclick = () => stepEncounter(-1);
   $("#nextclose", side).onclick = () => stepEncounter(1);
   $("#shipexpand", side).onclick = () => openShipView(true);

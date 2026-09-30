@@ -192,6 +192,14 @@ grid.
   / 1 NM and hull-to-hull distance labels. *Surroundings* frames the nearest
   ships; *Bridge* is the view ahead from the bridge wing. Light: day / dawn /
   dusk / night.
+* **Sea** - a wave-displaced ocean (`web_static/ocean.js`): 16 Gerstner wave
+  trains from a JONSWAP spectrum for the Strait's fetch-limited wind chop
+  (calm / moderate / fresh: Hs 0.3 / 0.7 / 1.0 m, Tp 3.1 / 4.1 / 4.6 s),
+  physically based shading (Fresnel for water's index of refraction, soft sky
+  reflection, sun glint, turbid green-grey water, whitecaps where the surface
+  folds). Every ship heaves, pitches and rolls on the same waves through a
+  damped spring with periods that scale with its length, so a Panamax barely
+  moves in chop while a tug bobs. Purely visual: routing does not use it.
 
 API: see the docstring of `src/saferoute/serve.py`.
 
