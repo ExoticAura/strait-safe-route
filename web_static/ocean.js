@@ -161,6 +161,11 @@ export function createOcean({detailNormals}) {
     uScatter: {value: 1},
     uScatterCol: {value: new THREE.Color("#35573f")},
     uFoamAmt: {value: 1},
+    uDepthTex: {value: null},
+    uDepthRect: {value: new THREE.Vector4(0, 0, 1, 1)},     // earth x0, z0 (north edge), width, height in metres
+    uDepthOn: {value: 0},
+    uDepthScale: {value: 60 / 255},
+    uEarth: {value: new THREE.Vector2()},
   };
   let waves = [], info = {}, t = 0, windFrom = 45;
 
@@ -187,6 +192,8 @@ export function createOcean({detailNormals}) {
         ${SEA_GLSL}
         uniform sampler2D uDetail; uniform vec4 uDetailOff; uniform float uDetailStr;
         uniform float uScatter; uniform vec3 uScatterCol; uniform float uFoamAmt;
+        uniform sampler2D uDepthTex; uniform vec4 uDepthRect; uniform float uDepthOn, uDepthScale;
+        uniform vec2 uEarth;
         varying vec2 vSeaP; varying float vCrest; varying vec2 vSeaXZ;
         float seaFoam;`)
       .replace("#include <color_fragment>", `#include <color_fragment>
@@ -195,7 +202,17 @@ export function createOcean({detailNormals}) {
         vec2 fw = fwidth(vSeaP);
         vec3 seaNw = seaNormalPix(vSeaP, max(max(fw.x, fw.y), 0.05), seaJ);
         seaFoam = smoothstep(0.6, 0.15, seaJ) * uFoamAmt;
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.9), seaFoam);`)
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.9), seaFoam);
+        // sea depth (GEBCO + dredged pockets): shallow water is greener and sandier
+        if (uDepthOn > 0.5) {
+          vec2 eP = vSeaP + uEarth;
+          vec2 duv = vec2((eP.x - uDepthRect.x) / uDepthRect.z, (eP.y - uDepthRect.y) / uDepthRect.w);
+          if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0) {
+            float dm = texture2D(uDepthTex, duv).r * 255.0 * uDepthScale;
+            float sh = 1.0 - smoothstep(3.0, 30.0, dm);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.20, 0.36, 0.31), sh * 0.38 * (1.0 - seaFoam));
+          }
+        }`)
       .replace("#include <roughnessmap_fragment>", `#include <roughnessmap_fragment>
         roughnessFactor = mix(roughnessFactor, 0.8, seaFoam);`)
       .replace("#include <normal_fragment_maps>", `#include <normal_fragment_maps>
@@ -241,6 +258,7 @@ export function createOcean({detailNormals}) {
   function update(dt, earthX, earthZ, centre) {
     t += dt;
     E.set(earthX, earthZ);
+    F.uEarth.value.set(earthX, earthZ);
     C.set(Math.round(centre.x * 2) / 2, Math.round(centre.z * 2) / 2);
     mesh.position.set(C.x, 0, C.y);
     U.uSeaCentre.value.copy(C);
@@ -274,6 +292,12 @@ export function createOcean({detailNormals}) {
     const d = displace(x, z);
     return displace(x - d[0], z - d[2])[1];
   }
+  // tint shallow water from a depth map: texture red = depth_m / scale_m (row 0 = north edge)
+  function setDepth(tex, rect, scale_m) {
+    tex.flipY = false; tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping; tex.colorSpace = THREE.NoColorSpace;
+    F.uDepthTex.value = tex; F.uDepthRect.value.set(...rect); F.uDepthScale.value = scale_m; F.uDepthOn.value = 1;
+  }
   function setDay(day) {
     F.uScatter.value = .02 + .9 * day;
   }
@@ -291,6 +315,6 @@ export function createOcean({detailNormals}) {
     material.customProgramCacheKey = () => "float" + lift;
     return material;
   }
-  return {mesh, material: mat, uniforms: U, glsl: SEA_GLSL, setSea, update, heightAt, setDay,
+  return {mesh, material: mat, uniforms: U, glsl: SEA_GLSL, setSea, update, heightAt, setDay, setDepth,
           floatMaterial, get info() { return info; }};
 }

@@ -852,6 +852,69 @@ export function createShipView(container) {
     world.add(m);
   }
 
+  // ---- land height: Copernicus DEM (surface model with the buildings filtered out), ~89 m grid
+  let terr = null;
+  function terrainAt(x, z) {
+    if (!terr) return 0;
+    const lon = O.lon + x / KX, lat = O.lat - z / KY;
+    const fx = (lon - terr.lon0) / terr.dlon, fy = (terr.lat1 - lat) / terr.dlat;      // row 0 = north
+    if (fx < 0 || fy < 0 || fx >= terr.w - 1 || fy >= terr.h - 1) return 0;
+    const i = Math.floor(fx), j = Math.floor(fy), a = fx - i, b = fy - j, W = terr.w, Hm = terr.hm;
+    return (Hm[j * W + i] * (1 - a) + Hm[j * W + i + 1] * a) * (1 - b) +
+           (Hm[(j + 1) * W + i] * (1 - a) + Hm[(j + 1) * W + i + 1] * a) * b;
+  }
+  function buildTerrain(t) {
+    return fetch(`${basePath}world/${t.file}`).then(r => r.ok ? r.text() : Promise.reject(r.status)).then(txt => {
+      const bin = atob(txt.trim()), n = bin.length, hm = new Float32Array(n);
+      for (let q = 0; q < n; q++) hm[q] = bin.charCodeAt(q) * t.scale_m;
+      terr = {w: t.w, h: t.h, lon0: t.lon0, lat1: t.lat1, dlon: (t.lon1 - t.lon0) / (t.w - 1),
+              dlat: (t.lat1 - t.lat0) / (t.h - 1), hm};
+      const pos = new Float32Array(n * 3), uv = new Float32Array(n * 2), idx = [];
+      for (let j = 0; j < t.h; j++) for (let i = 0; i < t.w; i++) {
+        const k = j * t.w + i, [x, z] = toLocal(t.lat1 - j * terr.dlat, t.lon0 + i * terr.dlon);
+        pos[3 * k] = x; pos[3 * k + 1] = LAND_TOP + hm[k]; pos[3 * k + 2] = z;
+        uv[2 * k] = x; uv[2 * k + 1] = -z;                 // metres east / north, like the land slab
+      }
+      // a cell is drawn where all four corners are raised land (the slab carries the rest)
+      for (let j = 0; j < t.h - 1; j++) for (let i = 0; i < t.w - 1; i++) {
+        const a = j * t.w + i, b = a + 1, c = a + t.w, d = c + 1;
+        if (hm[a] > 0 && hm[b] > 0 && hm[c] > 0 && hm[d] > 0) idx.push(a, c, b, b, c, d);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+      geo.setIndex(new THREE.Uint32BufferAttribute(idx, 1));
+      geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, landTop);
+      m.receiveShadow = true; m.frustumCulled = false;
+      world.add(m);
+    });
+  }
+  // ---- white water along the coast (a thin ribbon outside the land polygon, riding the waves)
+  function buildShore(s) {
+    return fetch(`${basePath}world/${s.file}`).then(r => r.ok ? r.json() : Promise.reject(r.status)).then(polys => {
+      const open = r => (r.length > 1 && r[0][0] === r[r.length - 1][0] && r[0][1] === r[r.length - 1][1]) ? r.slice(0, -1) : r;
+      const pts = r => open(r).map(([lo, la]) => { const [x, z] = toLocal(la, lo); return new THREE.Vector2(x, -z); });
+      const shapes = polys.map(rings => {
+        const sh = new THREE.Shape(pts(rings[0]));
+        rings.slice(1).forEach(h => sh.holes.push(new THREE.Path(pts(h))));
+        return sh;
+      });
+      const mat = new THREE.MeshBasicMaterial({color: 0xe8efec, transparent: true, opacity: .55, depthWrite: false});
+      ocean.floatMaterial(mat, .22);
+      const m = new THREE.Mesh(new THREE.ShapeGeometry(shapes, 1), mat);
+      m.rotation.x = -Math.PI / 2; m.renderOrder = 1; m.frustumCulled = false;
+      world.add(m);
+    });
+  }
+  // ---- sea depth map: tints the shallows
+  function loadDepth(d) {
+    new THREE.TextureLoader().load(`${basePath}world/${d.file}`, tex => {
+      const x0 = (d.lon0 - O.lon) * KX, zN = -(d.lat1 - O.lat) * KY;
+      ocean.setDepth(tex, [x0, zN, (d.lon1 - d.lon0) * KX, (d.lat1 - d.lat0) * KY], d.scale_m);
+    });
+  }
+
   // ---- buildings: OpenStreetMap footprints, loaded by tile around the ship
   const bMat = new THREE.MeshStandardMaterial({vertexColors: true, roughness: .75, metalness: .05, flatShading: true,
                                                side: THREE.DoubleSide,
@@ -881,8 +944,10 @@ export function createShipView(container) {
       else if (hs < .18) tint = [.93, .88, .78];
       else if (hs < .30) tint = [.78, .79, .80];
       else { const g0 = .90 + .08 * (hs - .3); tint = [g0, g0, g0 * .98]; }
-      ring.forEach(([x, z]) => { pos.push(x, LAND_TOP, z); col.push(tint[0] * .72, tint[1] * .72, tint[2] * .72); });
-      ring.forEach(([x, z]) => { pos.push(x, LAND_TOP + h, z); col.push(...tint); });
+      let cx = 0, cz = 0; ring.forEach(([x, z]) => { cx += x / n; cz += z / n; });
+      const gy = LAND_TOP + terrainAt(cx, cz);                 // ground under the footprint
+      ring.forEach(([x, z]) => { pos.push(x, gy, z); col.push(tint[0] * .72, tint[1] * .72, tint[2] * .72); });
+      ring.forEach(([x, z]) => { pos.push(x, gy + h, z); col.push(...tint); });
       for (let k = 0; k < n; k++) {
         const a0 = base + k, a1 = base + (k + 1) % n, b0 = a0 + n, b1 = a1 + n;
         idx.push(a0, a1, b1, a0, b1, b0);
@@ -965,25 +1030,29 @@ export function createShipView(container) {
     terminals.forEach(t => t.cranes.forEach(([la, lo, brg]) => {
       const [x, z] = toLocal(la, lo), yaw = (90 - brg) * Math.PI / 180;
       cranes.push([x, z, yaw]);
-      // stacks behind the crane: 6 rows x 3 bays of 20/40 ft boxes, 2-5 high
-      const inx = -Math.sin(brg * Math.PI / 180), inz = Math.cos(brg * Math.PI / 180);   // landward (east, south) unit
-      const alx = Math.cos(brg * Math.PI / 180), alz = Math.sin(brg * Math.PI / 180);   // along the quay
-      for (let r = 0; r < 6; r++) for (let bay = -1; bay <= 1; bay++) {
-        const tiers = 2 + Math.floor(rnd() * 4);
-        for (let k = 0; k < tiers; k++) {
-          const d = 70 + r * 22, a = bay * 16;
-          boxes.push([x + inx * d + alx * a, LAND_TOP + k * 2.6 + 1.3, z + inz * d + alz * a, yaw, cols[Math.floor(rnd() * cols.length)]]);
-        }
+    }));
+    // container yards: blocks of 10 bays x 6 rows, 1-4 high, laid out behind the quay
+    terminals.forEach(t => (t.yards || []).forEach(([la, lo, brg]) => {
+      const [bx, bz] = toLocal(la, lo), b = brg * Math.PI / 180, yaw = Math.PI - b;
+      const Lx = Math.sin(b), Lz = -Math.cos(b), Wx = Math.cos(b), Wz = Math.sin(b);
+      for (let r = 0; r < 6; r++) for (let bay = 0; bay < 10; bay++) {
+        if (rnd() < .07) continue;                                  // a gap here and there
+        const q = rnd(), tiers = q < .3 ? 1 : q < .6 ? 2 : q < .85 ? 3 : 4, w = (r - 2.5) * 2.9, l = (bay - 4.5) * 12.6;
+        boxes.push([bx + Wx * w + Lx * l, tiers, bz + Wz * w + Lz * l, yaw, cols[Math.floor(rnd() * cols.length)]]);
       }
     }));
     const cm = new THREE.InstancedMesh(craneGeometry(), craneMat, cranes.length);
     const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), Y = new THREE.Vector3(0, 1, 0), S1 = new THREE.Vector3(1, 1, 1);
     cranes.forEach(([x, z, yaw], i) => { Q.setFromAxisAngle(Y, yaw); M.compose(new THREE.Vector3(x, 0, z), Q, S1); cm.setMatrixAt(i, M); });
     cm.castShadow = true; world.add(cm);
-    const bm = new THREE.InstancedMesh(new THREE.BoxGeometry(2.44, 2.59, 12.2), boxMat, boxes.length);
-    const C = new THREE.Color();
-    boxes.forEach(([x, y, z, yaw, c], i) => { Q.setFromAxisAngle(Y, yaw); M.compose(new THREE.Vector3(x, y, z), Q, S1);
-                                             bm.setMatrixAt(i, M); bm.setColorAt(i, C.set(c)); });
+    // one box per stack, scaled to its height (base at the unit box's foot)
+    const unit = new THREE.BoxGeometry(2.44, 1, 12.2); unit.translate(0, .5, 0);
+    const bm = new THREE.InstancedMesh(unit, boxMat, boxes.length);
+    const C = new THREE.Color(), SC = new THREE.Vector3();
+    boxes.forEach(([x, tiers, z, yaw, c], i) => { Q.setFromAxisAngle(Y, yaw); SC.set(1, tiers * 2.59, 1);
+                                                 M.compose(new THREE.Vector3(x, LAND_TOP, z), Q, SC);
+                                                 bm.setMatrixAt(i, M); bm.setColorAt(i, C.set(c)); });
+    bm.frustumCulled = false;
     world.add(bm);
   }
 
@@ -1266,7 +1335,13 @@ export function createShipView(container) {
     setWorld(w) {
       basePath = w.basePath || "";
       if (w.land && !world.userData.land) { buildLand(w.land); world.userData.land = true; }
-      if (w.meta && !worldMeta) { worldMeta = w.meta; buildPorts(w.meta.terminals || []); applyLanduse(w.meta.landuse); updateTiles(); }
+      if (w.meta && !worldMeta) {
+        worldMeta = w.meta; buildPorts(w.meta.terminals || []); applyLanduse(w.meta.landuse);
+        if (w.meta.depth) loadDepth(w.meta.depth);
+        if (w.meta.shore) buildShore(w.meta.shore).catch(e => console.error("shore", e));
+        // buildings wait for the terrain so they stand on the ground
+        (w.meta.terrain ? buildTerrain(w.meta.terrain).catch(e => console.error("terrain", e)) : Promise.resolve()).then(updateTiles);
+      }
       if (w.ships) {
         allShips = w.ships;
         placed.forEach(v => { shipsG.remove(v.obj); shipsG.remove(v.halo); }); placed.clear(); labelKey = "";

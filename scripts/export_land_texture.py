@@ -117,6 +117,16 @@ def main(argv=None):
             rr = 330 / mpp
             d.ellipse([x - rr, y - rr, x + rr, y + rr], fill=255)
     port = port.filter(ImageFilter.GaussianBlur(2))
+    # the yard blocks of export_3d_detail.py: paved ground under and round each,
+    # painted over parks too (OSM tags some terminal land as leisure/park)
+    yards = mask()
+    d = ImageDraw.Draw(yards)
+    for t in world.get("terminals", []):
+        for lat, lon, brg in t.get("yards", []):
+            x, y = px(lon, lat)
+            rr = 80 / mpp
+            d.ellipse([x - rr, y - rr, x + rr, y + rr], fill=255)
+    yards = yards.filter(ImageFilter.GaussianBlur(2))
 
     park, water = mask(), mask()
     dp, dw = ImageDraw.Draw(park), ImageDraw.Draw(water)
@@ -166,6 +176,7 @@ def main(argv=None):
     over(port, C["port"])
     over(park, C["park"])
     over(water, C["water"])
+    over(yards, C["port"])
     over(roads_minor, C["road"], .9)
     over(roads_major, C["road_major"])
     over(bmask, C["building"], .85)

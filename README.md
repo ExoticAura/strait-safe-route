@@ -293,7 +293,7 @@ shoals and banks the proxy cannot know. Four consequences, all in the code:
 | `python scripts/make_figures.py` | F1–F4 for the report |
 | `python scripts/replan_benchmark.py [--ais day.csv]` | re-planning every 10 / 30 s as traffic moves → `outputs/s4_replan_*.csv` |
 | `python scripts/update_coastline.py reclamation.gpkg` | add reclaimed land to the coastline |
-| `python -m pytest tests -q` | 57 tests |
+| `python -m pytest tests -q` | 59 tests |
 | `python scripts/export_web_data.py` | rebuild `web_static/data.json` for the in-browser version |
 
 `python scripts/export_3d_world.py --osm <singapore-driving>/public/data` rebuilds
@@ -302,6 +302,13 @@ representative quay cranes / container yards for `web_static/world/`.
 `python scripts/export_land_texture.py --osm <same>` then paints the land-use
 texture draped over the land (urban ground, port yards, parks, reservoirs, roads,
 building footprints) as `web_static/world/landuse.jpg`.
+`python scripts/export_3d_detail.py --osm <same>` (run it between the two) adds
+land height from the Copernicus DEM tile in `data/dem/` (buildings filtered out
+by a 450 m morphological opening, so hills stay and towers do not: approximate,
+Bukit Timah reads about 90 m, not 164 m), a sea-depth map from the route board
+(shallow water is tinted), a white-water ribbon along the coast, and container
+yard blocks packed into the free land behind each quay (about 100,000 stacks over
+the four terminals; representative, not surveyed).
 
 `web_static/` is the same app with the engine ported to JavaScript
 (`engine.js`), so it runs with no server at all; its routes and costs match the
@@ -342,6 +349,6 @@ src/saferoute/
   data/sg_land.geojson   OSM land polygons for the study area
   web/            index.html app.js map.js ship3d.js style.css vendor/
 scripts/          capture_ais_snapshot.py run_pipeline.py make_figures.py
-tests/            57 tests
+tests/            59 tests
 data/ais/         real snapshots go here      data/bathymetry/   GEBCO goes here
 ```
