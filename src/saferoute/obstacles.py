@@ -463,7 +463,8 @@ def synthetic_snapshot(grid, seed: int = 20260929, density: float = 1.0,
     # keep clear: the terminal approaches, the pilotage tracks to the berths,
     # and a fairway from each terminal approach to the nearest point of the
     # TSS (anchorages are laid out round the port fairways, not across them)
-    fair = [pt for c in SA.TERMINALS for pt in densify(SA.fairway(c), 0.1)]
+    from .seagrid import fairway_path
+    fair = [pt for c in SA.TERMINALS for pt in densify(fairway_path(c), 0.1)]
     ap = np.array([p.approach for p in SA.PORTS.values()] +
                   [pt for p in SA.PORTS.values() if len(p.pilot) > 1
                    for pt in densify(p.pilot, 0.1)] + fair)

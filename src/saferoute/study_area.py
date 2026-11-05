@@ -84,13 +84,14 @@ PORTS: Dict[str, Port] = {p.code: p for p in [
          "terminal", 23.0),
     Port("SGJUR", "Jurong Port",             1.3000, 103.7150, 1.2630, 103.7400,
          "terminal", 15.7),
-    Port("SGPPT", "Pasir Panjang Terminal",  1.2733, 103.7550, 1.2700, 103.7500,
+    Port("SGPPT", "Pasir Panjang Terminal",  1.2733, 103.7550, 1.2380, 103.7790,
          "terminal", 16.0),
     Port("SGKEP", "Keppel / Brani Terminal", 1.2640, 103.8380, 1.2460, 103.8620,
          "terminal", 15.0),
     Port("EAST",  "Strait entrance (East)",  1.3200, 104.4300, 1.3200, 104.4300,
          "gateway", 25.0, side="E"),
-    Port("WEST",  "Strait entrance (West)",  1.0920, 103.4160, 1.0920, 103.4160,
+    Port("WEST",  "Strait entrance (West)",  1.1100, 103.4400, 1.1100, 103.4400,
+         # was 1.092, 103.416: GEBCO shows 6-12 m on its own SW edge, so the gateway sits 2.7 NM in
          "gateway", 25.0, side="W"),
 ]}
 

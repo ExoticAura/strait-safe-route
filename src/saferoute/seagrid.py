@@ -52,7 +52,7 @@ BASIN_SHORE_NM = 0.40          # within this of the shore = basin / narrow water
 # published depth that no shore-distance proxy can know about. Within this
 # radius of a terminal's approach position the charted depth is raised to at
 # least the terminal's maintained depth (Port.max_draught_m). Applied to the
-# proxy only - a real bathymetry file already contains the dredging.
+# proxy AND on top of a real bathymetry file: GEBCO's ~460 m cells cannot resolve them.
 DREDGED_POCKET_NM = 1.0
 FAIRWAY_HALF_NM = 0.3
 
@@ -413,6 +413,62 @@ def find_bathymetry_file(directory: str = BATHY_DIR) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------
+_FAIRWAYS: dict = {}
+
+
+def fairway_path(code: str) -> List[Tuple[float, float]]:
+    """A terminal's fairway as a polyline that stays in water: the cheapest
+    water path from its approach to the TSS end of study_area.fairway(code),
+    keeping to mid-channel. The straight line study_area.fairway() gives can
+    cross islands (Pulau Bukom, off Pasir Panjang); the dredged corridor and
+    the ship-free corridor follow this path instead."""
+    if code in _FAIRWAYS:
+        return _FAIRWAYS[code]
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import dijkstra
+    res = SA.DEFAULT_RESOLUTION_DEG
+    lats = np.arange(SA.BBOX["lat_min"], SA.BBOX["lat_max"] + 1e-9, res)
+    lons = np.arange(SA.BBOX["lon_min"], SA.BBOX["lon_max"] + 1e-9, res)
+    land = rasterise_land(lats, lons, load_land_polygons(LAND_GEOJSON))
+    dist = ndimage.distance_transform_edt(~land) * res * 60.0          # NM, roughly
+    ny, nx = land.shape
+    idx = -np.ones(land.shape, int)
+    idx[~land] = np.arange((~land).sum())
+    rows, cols, w = [], [], []
+    for dy, dx in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        sa = (slice(0, ny - dy), slice(max(0, -dx), nx - max(0, dx)))
+        sb = (slice(dy, ny), slice(max(0, dx), nx - max(0, -dx)))
+        A, B = idx[sa], idx[sb]
+        m = (A >= 0) & (B >= 0)
+        cm = 1.0 + 4.0 * np.exp(-0.5 * (dist[sa] + dist[sb]) / 0.25)
+        rows += list(A[m]); cols += list(B[m]); w += list(math.hypot(dy, dx) * cm[m])
+    n = int((~land).sum())
+    G = coo_matrix((w, (rows, cols)), shape=(n, n)).tocsr()
+    (a_la, a_lo), (b_la, b_lo) = SA.fairway(code)
+
+    def cell(la, lo):
+        iy, ix = int(round((la - lats[0]) / res)), int(round((lo - lons[0]) / res))
+        if land[iy, ix]:
+            d = np.where(land, 1e9, np.hypot(np.arange(ny)[:, None] - iy, np.arange(nx)[None, :] - ix))
+            iy, ix = np.unravel_index(np.argmin(d), d.shape)
+        return iy, ix
+    (ay, ax), (by, bx) = cell(a_la, a_lo), cell(b_la, b_lo)
+    s, t = idx[ay, ax], idx[by, bx]
+    _, pred = dijkstra(G, directed=False, indices=s, return_predecessors=True)
+    inv = np.argwhere(~land)
+    path, c = [], t
+    while c >= 0:
+        y, x = inv[c]
+        path.append((float(lats[y]), float(lons[x])))
+        if c == s:
+            break
+        c = pred[c]
+    path = path[::-1] if path and path[-1] == (float(lats[ay]), float(lons[ax])) else path
+    out = [(a_la, a_lo)] + path[::3] + [(b_la, b_lo)]
+    _FAIRWAYS[code] = out
+    return out
+
+
 def dredged_pocket_mask(lats, lons, land, port) -> np.ndarray:
     """Water dredged to the terminal's depth: round the approach, round the
     berth, along the pilotage track between them (0.3 NM either side) and
@@ -422,10 +478,11 @@ def dredged_pocket_mask(lats, lons, land, port) -> np.ndarray:
     m |= haversine_nm(LA, LO, port.lat, port.lon) <= DREDGED_POCKET_NM
     # ... and along the fairway out to the TSS (FAIRWAY_HALF_NM either side)
     if port.kind == "terminal":
-        (a_la, a_lo), (b_la, b_lo) = SA.fairway(port.code)
-        n = max(2, int(haversine_nm(a_la, a_lo, b_la, b_lo) / 0.1) + 1)
-        for t in np.linspace(0.0, 1.0, n):
-            m |= haversine_nm(LA, LO, a_la + (b_la - a_la) * t, a_lo + (b_lo - a_lo) * t) <= FAIRWAY_HALF_NM
+        fw = fairway_path(port.code)
+        for (a_la, a_lo), (b_la, b_lo) in zip(fw[:-1], fw[1:]):
+            n = max(2, int(haversine_nm(a_la, a_lo, b_la, b_lo) / 0.1) + 1)
+            for t in np.linspace(0.0, 1.0, n):
+                m |= haversine_nm(LA, LO, a_la + (b_la - a_la) * t, a_lo + (b_lo - a_lo) * t) <= FAIRWAY_HALF_NM
     for (a_la, a_lo), (b_la, b_lo) in zip(port.pilot[:-1], port.pilot[1:]):
         n = max(2, int(haversine_nm(a_la, a_lo, b_la, b_lo) / 0.1) + 1)
         for t in np.linspace(0.0, 1.0, n):
@@ -484,4 +541,8 @@ def build_seagrid(resolution_deg: float = SA.DEFAULT_RESOLUTION_DEG,
     if path:
         la, lo, d = load_bathymetry_file(path)
         grid.apply_bathymetry(la, lo, d, source=os.path.basename(path))
+        # GEBCO is ~460 m: it cannot see the dredged terminal pockets, berth
+        # basins and fairways (it shows 0-11 m at the Jurong / Pasir Panjang
+        # approaches). Keep their maintained depth on top of the real grid.
+        grid.depth_m = apply_dredged_pockets(lats, lons, land, grid.depth_m)
     return grid

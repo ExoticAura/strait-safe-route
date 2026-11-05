@@ -152,6 +152,13 @@ def voyage(grid, traffic, vessel, mode, origin, dest, cycle_s, max_cycles, t_sta
     cfg = NW.config_for(mode)
     here, t, k = origin, t_start, 0
     speed = SA.PLANNING_SPEED_KN * KN
+    # a ship leaving a berth is on the fixed pilotage track, not on the board:
+    # until it has sailed that track the plan starts from the terminal itself
+    pilot_m = 0.0
+    if isinstance(origin, str) and origin in SA.TERMINALS:
+        pilot_m = SA.PORTS[origin].pilot_nm * M_PER_NM if hasattr(SA.PORTS[origin], "pilot_nm") else \
+            sum(float(haversine_nm(*a, *b)) for a, b in zip(SA.PORTS[origin].pilot[:-1], SA.PORTS[origin].pilot[1:])) * M_PER_NM
+    done_m = 0.0
     while k < max_cycles:
         t0 = time.perf_counter()
         snap = traffic.at(t)
@@ -160,7 +167,7 @@ def voyage(grid, traffic, vessel, mode, origin, dest, cycle_s, max_cycles, t_sta
         t2 = time.perf_counter()
         net = NW.build_network(grid, vessel, cfg, field)
         t3 = time.perf_counter()
-        plans = plan_route(net, here, dest, snap)
+        plans = plan_route(net, origin if done_m < pilot_m else here, dest, snap)
         t4 = time.perf_counter()
         ok = bool(plans)
         m = plans[0].metrics if ok else {}
@@ -174,7 +181,8 @@ def voyage(grid, traffic, vessel, mode, origin, dest, cycle_s, max_cycles, t_sta
                          nodes_expanded=plans[0].search.get("nodes_expanded") if ok else None))
         if not ok:
             break
-        here, arrived = sail_along(plans[0].coords, speed * cycle_s)
+        here, arrived = sail_along(plans[0].coords, speed * cycle_s + (done_m if done_m < pilot_m else 0.0))
+        done_m += speed * cycle_s
         t += cycle_s
         k += 1
         if arrived or m["distance_nm"] < 1.0:

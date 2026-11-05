@@ -47,7 +47,7 @@ OUT = os.path.join(ROOT, "src", "saferoute", "data", "berths.json")
 REFS = {
     "SGTUA": ((1.2440, 103.6350), "Tuas Port - middle finger pier, south berth", (1.2400, 103.6600)),
     "SGJUR": ((1.2980, 103.7190), "Jurong Port - main wharf", (1.2630, 103.7400)),
-    "SGPPT": ((1.2640, 103.7800), "Pasir Panjang - inner basin, east quay", (1.2700, 103.7500)),
+    "SGPPT": ((1.2640, 103.7800), "Pasir Panjang - inner basin, east quay", (1.2380, 103.7790)),
     "SGKEP": ((1.2615, 103.8405), "Brani Terminal - north-east wharf", (1.2460, 103.8620)),
 }
 BERTH_OFF_M = 40.0

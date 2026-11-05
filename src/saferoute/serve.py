@@ -154,6 +154,11 @@ def _endpoint_check(net: NW.NavNetwork, x) -> Optional[str]:
     """Why an endpoint cannot be used by this ship, or None."""
     la, lo = SA.port(x).approach if isinstance(x, str) else x
     g = net.grid
+    if isinstance(x, str) and SA.PORTS[x].kind == "terminal":
+        port, ship = SA.PORTS[x], net.vessel
+        if ship.draught_m + max(1.0, 0.1 * ship.draught_m) > port.max_draught_m:
+            return (f"{port.name} is not reachable for this ship ({ship.name}): its maintained depth "
+                    f"is {port.max_draught_m:.1f} m, the ship needs {ship.draught_m + max(1.0, 0.1 * ship.draught_m):.1f} m incl. UKC")
     if not g.inside(la, lo):
         return f"{_point_label(x)} is outside the study area"
     try:

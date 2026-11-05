@@ -28,28 +28,30 @@ python -m saferoute.serve            # opens the chart at http://127.0.0.1:8765
 | **2. Static pathfinding** | Dijkstra, A* (admissible great-circle heuristic), weighted A*, spatially distinct alternatives, Theta*-style smoothing, turn radii per waypoint (sailed track, re-search if a turn is too tight); three objectives: shortest / balanced / safest | `algorithms.py`, `network.py`, `sailing.py`, `routing.py` |
 | **3. Baseline route validation** | Paired comparison with historical voyages on distance and reliability (ships met, closest approach, hard breaches, shallow water, land), t-test + Wilcoxon | `ais.py`, `evaluation.py`, `scripts/run_pipeline.py` |
 
-## Headline results (Panamax, synthetic snapshot of 207 ships; `outputs/`)
+## Headline results (Panamax, synthetic snapshot of 181 ships, GEBCO 2026 depths; `outputs/`)
 
 All figures are measured on the **sailed track** (the legs joined by the
 turns the ship can actually make, see *How the ship turns*), not on the
 search polyline.
 
 * **Safest vs shortest**, averaged over all 16 entrance↔berth routes: ships
-  met **2.44 vs 7.38** (−67 %), NM sailed inside a target CPA **1.45 vs 4.98**,
-  for +0.02 NM (40.61 vs 40.59 NM). East entrance → Pasir Panjang berth:
-  **4 ships met instead of 20** for +0.22 NM.
+  met **2.12 vs 6.19** (−66 %), NM sailed inside a target CPA ****1.11 vs 4.12****,
+  for +0.07 NM (38.82 vs 38.75 NM). East entrance → Pasir Panjang berth:
+  **5 ships met instead of 14** for +0.65 NM.
 * **A\* vs Dijkstra**: identical optimal cost on every route (gap 0.0); A\*
-  expands **53 % fewer nodes** than Dijkstra on the 16-neighbour graph.
+  expands **48 % fewer nodes** than Dijkstra on the 16-neighbour graph.
 * **Validation** against 320 baseline voyages (current-practice lane following
   that knows land and depth but not where ships are anchored, to the same
-  berths): planned routes are **2.1 % shorter** and meet **84 % fewer ships**
-  (safest mode; 14.5 → 2.3 per voyage, p < 0.0001); **100 %** of planned
-  routes are free of hard CPA breaches against **33 %** of baseline voyages.
-* **Re-planning as traffic moves** (`scripts/replan_benchmark.py`, 384
-  re-plans, 207 anchored + 40 moving simulated ships, 2-core 2.1 GHz Xeon):
+  berths): planned routes are **5.4 % shorter** and meet **75 % fewer ships**
+  (safest mode; 7.6 → 1.9 per voyage, p < 0.0001); **100 %** of planned
+  routes are free of hard CPA breaches against **43 %** of baseline voyages.
+  (The baseline now also crosses water GEBCO shows too shallow for the ship.)
+* **Re-planning as traffic moves** (`scripts/replan_benchmark.py`, 369
+  re-plans, 181 anchored + 40 moving simulated ships, 2-core 2.1 GHz Xeon):
   a full re-plan (traffic, obstacle field, graph, search, sail, measure)
-  takes **0.63 s median, 1.6 s 95th percentile, 2.1 s worst** - under a
-  quarter of a 10 s cycle. Every re-plan found a feasible route.
+  takes **0.49 s median, 1.3 s 95th percentile, 1.9 s worst** - under a
+  fifth of a 10 s cycle. **99 %** found a feasible route; the 3 that did not
+  (East → Pasir Panjang, about 3650 s into the run) are a known gap.
 * **Turning**: every route, for every ship class, is sailable: no turn tighter
   than 1.5 ship lengths at sea (1 L in pilotage waters). The sailed track is
   at most 200 m off the planned legs.
@@ -255,17 +257,31 @@ API: see the docstring of `src/saferoute/serve.py`.
 
 ## Real bathymetry
 
-The default depth is a **declared proxy** (depth rises with distance from the
-OSM coastline, plus dredged pockets at the terminals). Against the 36 charted
-depths MPA publishes for its anchorages it is off by 6.1 m on average
-(`outputs/s1_proxy_vs_charted_depth.csv`) — good enough to keep ships off the
-shore, not good enough to find shoals. To use real depths:
+GEBCO 2026 (Esri ASCII, N 1.45 / S 1.03 / W 103.40 / E 104.45) is in
+`data/bathymetry/` and loaded automatically (the status bar names the file).
+Without a file the board falls back to a **declared proxy** (depth rises with
+distance from the coastline). Both were checked against the 36 charted depths
+MPA publishes for its anchorages (`outputs/s1_proxy_vs_charted_depth.csv`):
 
-1. Go to <https://download.gebco.net>, draw the box **N 1.45, S 1.03, W 103.40,
-   E 104.45**, choose **2D netCDF**, **Esri ASCII** or **Data GeoTIFF**.
-2. Put the file in `data/bathymetry/`. It is used automatically (the status bar
-   says which file). Esri ASCII needs nothing extra; GeoTIFF needs `tifffile`,
-   netCDF needs `netCDF4`.
+| depth source | mean abs. error | bias | within 3 m |
+|---|---|---|---|
+| shore-distance proxy | 5.9 m | +2.0 m | 12 / 36 |
+| GEBCO 2026 (+ dredged pockets) | 7.2 m | +2.2 m | 9 / 36 |
+
+GEBCO is not better than the proxy at these points: its ~460 m cells are
+smoothed and partly predicted in the shallow strait. What it adds is real
+shoals and banks the proxy cannot know. Four consequences, all in the code:
+
+1. **Dredged pockets stay on top.** GEBCO cannot see terminal basins or
+   fairways (0-11 m at the Jurong and Pasir Panjang approaches), so each
+   terminal's maintained depth is applied over it (`apply_dredged_pockets`).
+2. **Fairways follow the water.** `seagrid.fairway_path()` runs the dredged,
+   ship-free corridor from each approach to the TSS through water, not
+   through Pulau Bukom as the straight line did.
+3. **The west gateway moved** from 1.092 N 103.416 E to 1.110 N 103.440 E
+   (2.7 NM): GEBCO shows 6-12 m on its own south-west edge.
+4. **Pasir Panjang's pilotage start moved** to 1.238 N 103.779 E, south-east
+   of the berth, so the ship arrives without a hairpin.
 
 ## Commands
 
@@ -301,7 +317,7 @@ See **Deploying to Railway** below.
 * The coastline is an **OpenStreetMap land extract from 2017** (ODbL), topped
   up with newer reclaimed land from 2026 OSM buildings and from Sentinel-2
   (2016-2025, see *Coastline*). Reclamation after 2025 is missing.
-* Depth is a **proxy** until GEBCO is supplied; terminal maintained depths
+* Depth is GEBCO 2026 at ~460 m (see *Real bathymetry*) with terminal pockets forced on top; terminal maintained depths
   (Tuas 23 m, Jurong 15.7 m, Pasir Panjang 16 m, Keppel 15 m) are planning
   assumptions in `study_area.py`.
 * The TSS is **schematic** (~0.5 NM). Anchorage extents are approximated as
