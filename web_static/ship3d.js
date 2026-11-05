@@ -156,6 +156,53 @@ function foamTex() {
   }, {repeat: true, srgb: false});
 }
 
+
+/* hull plating: the whole side painted into one texture per side (colour bands, plate seams,
+   rust streaks, draught marks, bow thruster, name) so the hull reads as steel, not flat colour */
+const SHIP_NAMES = ["KOTA PERDANA", "ORIENT PIONEER", "STRAIT VOYAGER", "MERLION STAR", "SELAT SINGA",
+                    "PACIFIC HARMONY", "LION CITY", "BINTAN PRIDE", "SUNDA GLORY", "TEMASEK ARROW"];
+function hullTextures(H, colours, name) {
+  const W = 2048, Hh = 256, VM = H.D + 5, pxm = W / H.L, pym = Hh / VM;
+  return [false, true].map(mirror => canvasTex(W, Hh, (g) => {
+    const r = rng(41), py = h => (1 - h / VM) * Hh;
+    for (let x = 0; x < W; x++) {                                                   // colour bands, column by column
+      const u = x / W, deck = H.deckH(u);
+      g.fillStyle = colours.topside; g.fillRect(x, py(deck), 1, py(0) - py(deck) + 2);
+      if (colours.stripe) { g.fillStyle = "#e8e6df"; g.fillRect(x, py(deck), 1, .7 * pym); }
+      g.fillStyle = "#141414"; g.fillRect(x, py(H.T + .9), 1, 1.15 * pym);        // boot top
+      g.fillStyle = colours.bottom; g.fillRect(x, py(H.T - .25), 1, py(0) - py(H.T - .25) + 2);   // antifouling
+    }
+    g.lineWidth = 1;
+    g.strokeStyle = "rgba(0,0,0,.22)";                                                // plate seams
+    for (let m = 6; m < H.L; m += 12 + (r() < .3 ? 2 : 0)) { g.beginPath(); g.moveTo(m * pxm, 0); g.lineTo(m * pxm, Hh); g.stroke(); }
+    for (let h = 1.2; h < VM; h += 2.4) { g.beginPath(); g.moveTo(0, py(h)); g.lineTo(W, py(h)); g.stroke(); }
+    g.fillStyle = "rgba(255,255,255,.05)";                                           // scuffed plates
+    for (let i = 0; i < 160; i++) g.fillRect(r() * W, py(H.T + 1 + r() * (H.D - H.T)), 6 + r() * 40, 2 + r() * 8);
+    for (let i = 0; i < 90; i++) {                                                   // rust streaks under the scuppers
+      const x = r() * W, y0 = py(H.deckH(x / W) - .8), len = (1.5 + r() * 5) * pym, a = .08 + r() * .14;
+      const gr = g.createLinearGradient(0, y0, 0, y0 + len);
+      gr.addColorStop(0, `rgba(120,68,36,${a})`); gr.addColorStop(1, "rgba(120,68,36,0)");
+      g.fillStyle = gr; g.fillRect(x, y0, 1.5 + r() * 2.5, len);
+    }
+    const txt = (str, u, h, sizeM, col, bold = true) => {                            // lettering, true proportions
+      g.save(); g.translate(u * W, py(h)); g.scale(pxm / pym, 1);
+      g.fillStyle = col; g.font = `${bold ? "bold " : ""}${sizeM * pym}px sans-serif`;
+      g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(str, 0, 0); g.restore();
+    };
+    for (const u of [.04, .965]) for (let m = 1; m <= Math.ceil(H.T) + 1; m++) txt(String(m), u, m, .34, "#f3f1e8", false);   // draught marks
+    g.strokeStyle = "rgba(10,10,10,.8)"; g.fillStyle = "rgba(8,8,8,.9)";              // bow thruster tunnel
+    g.beginPath(); g.ellipse(.91 * W, py(H.T * .5), 1.7 * pxm, 1.7 * pym, 0, 0, 7); g.fill();
+    const lt = colours.topside === "#e8e6df" ? "#1d2b3a" : "#f1efe6";
+    txt(name, .885, H.deckH(.885) - 2.4, 1.5, lt);                                    // name on the bow
+    txt(name, .13, H.deckH(.13) - 2.2, 1.1, lt);                                      // and aft, with the port
+    txt("SINGAPORE", .13, H.deckH(.13) - 3.9, .8, lt, false);
+    if (mirror) { const c = g.canvas, tmp = document.createElement("canvas"); tmp.width = W; tmp.height = Hh;
+      /* text reads correctly from the port side: flip the whole side */
+      const t2 = tmp.getContext("2d"); t2.translate(W, 0); t2.scale(-1, 1); t2.drawImage(c, 0, 0);
+      g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, Hh); g.drawImage(tmp, 0, 0); }
+  })).map(t => { t.anisotropy = 8; return t; });
+}
+
 /* ------------------------------------------------------------------ hull */
 function hullModel(v) {
   const L = v.loa_m, B = v.beam_m, D = v.moulded_depth_m || v.beam_m * .65, T = v.draught_m;
@@ -185,7 +232,7 @@ function hullModel(v) {
   return {L, B, D, T, tanker, deckH, keelH, xStern, xStem, half};
 }
 
-function buildHull(H, colours) {
+function buildHull(H, colours, name) {
   const NS = 150, NH = 34;
   const pos = [], col = [], idx = [];
   const cRed = new THREE.Color(colours.bottom), cBoot = new THREE.Color("#141414"),
@@ -207,22 +254,22 @@ function buildHull(H, colours) {
     row.unshift([lerp(H.xStern(hk), H.xStem(hk), s), hk, 0, hd]);   // bottom centreline
     rows.push(row);
   }
-  const W = rows[0].length;
-  for (const side of [1, -1]) {
-    const base = pos.length / 3;
-    rows.forEach(row => row.forEach(([x, h, w, hd]) => {
-      pos.push(x, h, w * side); const c = colourAt(h, hd); col.push(c.r, c.g, c.b);
-    }));
+  const W = rows[0].length, VM = H.D + 5;
+  const hullTex = hullTextures(H, colours, name);
+  const sideGeos = [1, -1].map(side => {
+    const p = [], uv = [], ii = [];
+    rows.forEach(row => row.forEach(([x, h, w]) => { p.push(x, h, w * side); uv.push((x + H.L / 2) / H.L, h / VM); }));
     for (let i = 0; i < NS; i++) for (let j = 0; j < W - 1; j++) {
-      const a = base + i * W + j, b = a + W, c = b + 1, d = a + 1;
+      const a = i * W + j, b = a + W, c = b + 1, d = a + 1;
       // outward-facing winding (starboard +z, port -z) so lighting and culling are right
-      if (side > 0) idx.push(a, b, d, d, b, c); else idx.push(a, d, b, d, c, b);
+      if (side > 0) ii.push(a, b, d, d, b, c); else ii.push(a, d, b, d, c, b);
     }
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-  g.setIndex(idx); g.computeVertexNormals();
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
+    gg.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    gg.setIndex(ii); gg.computeVertexNormals();
+    return gg;
+  });
 
   // transom: close station 0 across the centreline
   const tp = [], tc = [], ti = [], r0 = rows[0];
@@ -243,11 +290,14 @@ function buildHull(H, colours) {
 
   const mat = new THREE.MeshStandardMaterial({vertexColors: true, roughness: .55, metalness: .25, side: THREE.DoubleSide});
   const grp = new THREE.Group();
-  const hull = new THREE.Mesh(g, mat); hull.castShadow = hull.receiveShadow = true;
+  const hulls = sideGeos.map((gg, i) => {
+    const m = new THREE.Mesh(gg, new THREE.MeshStandardMaterial({map: hullTex[i], roughness: .5, metalness: .3, side: THREE.DoubleSide}));
+    m.castShadow = m.receiveShadow = true; return m;
+  });
   const tr = new THREE.Mesh(tg, mat.clone()); tr.material.side = THREE.DoubleSide;
   const deck = new THREE.Mesh(dg, new THREE.MeshStandardMaterial({color: colours.deck, roughness: .85, side: THREE.DoubleSide}));
   deck.receiveShadow = true;
-  grp.add(hull, tr, deck);
+  grp.add(...hulls, tr, deck);
 
   // bulbous bow
   const bl = H.L * .045, bulb = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 20),
@@ -279,6 +329,30 @@ function buildHull(H, colours) {
 function box(w, h, d, mat, x, y, z) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
   m.position.set(x, y + h / 2, z); m.castShadow = true; m.receiveShadow = true; return m;
+}
+
+function buildRailings(H) {
+  // guard rails along both deck edges: posts and two rails, instanced
+  const g = new THREE.Group(), mat = new THREE.MeshStandardMaterial({color: "#d8d4c6", roughness: .6, metalness: .3});
+  const posts = [], rails = [];
+  for (const side of [1, -1]) {
+    let prev = null;
+    for (let x = -H.L * .38; x < H.L * .47; x += 2.4) {
+      const s = clamp((x + H.L / 2) / H.L, 0, 1), y = H.deckH(s), z = side * (H.half(s, y) - .1);
+      posts.push([x, y + .55, z]);
+      if (prev) for (const k of [.5, 1.0]) rails.push([prev[0], prev[2], x, z, y + k]);
+      prev = [x, y, z];
+    }
+  }
+  const pm = new THREE.InstancedMesh(new THREE.BoxGeometry(.06, 1.1, .06), mat, posts.length);
+  const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), Y = new THREE.Vector3(0, 1, 0), S = new THREE.Vector3(1, 1, 1);
+  posts.forEach(([x, y, z], i) => { M.makeTranslation(x, y, z); pm.setMatrixAt(i, M); });
+  const rm = new THREE.InstancedMesh(new THREE.BoxGeometry(1, .05, .05), mat, rails.length);
+  rails.forEach(([x0, z0, x1, z1, y], i) => {
+    const len = Math.hypot(x1 - x0, z1 - z0); Q.setFromAxisAngle(Y, -Math.atan2(z1 - z0, x1 - x0));
+    M.compose(new THREE.Vector3((x0 + x1) / 2, y, (z0 + z1) / 2), Q, S.set(len, 1, 1)); rm.setMatrixAt(i, M);
+  });
+  g.add(pm, rm); return g;
 }
 function buildAccommodation(H, xCentre, decks, lights) {
   // A stepped deckhouse: lower decks full width, upper decks set back and a
@@ -556,6 +630,47 @@ function foamMaterial(foam, sea) {
         gl_FragColor = vec4(vec3(1.), 1.) * f * vF * opacity * (.35 + .65 * edge); }`,
   });
 }
+
+function sprayDot() {
+  return canvasTex(64, 64, (g, w, h) => {
+    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, "rgba(255,255,255,1)"); gr.addColorStop(.5, "rgba(255,255,255,.45)"); gr.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+  });
+}
+function buildSpray(H) {
+  // bow spray: droplets thrown out and up from the stem, falling back in an arc
+  const N = 520, pos = new Float32Array(N * 3), col = new Float32Array(N * 3), vel = new Float32Array(N * 3), life = new Float32Array(N).fill(0);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3)); geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  const mat = new THREE.PointsMaterial({size: .8, map: sprayDot(), vertexColors: true, transparent: true, depthWrite: false,
+                                        blending: THREE.AdditiveBlending, sizeAttenuation: true});
+  const pts = new THREE.Points(geo, mat); pts.frustumCulled = false; pts.renderOrder = 3;
+  let carry = 0;
+  function update(dt, sog) {
+    const k = clamp((sog - 3) / 12, 0, 1.4);                    // nothing below ~3 kn, a lot at 15
+    carry += dt * 160 * k * k;
+    for (let i = 0; i < N; i++) {
+      if (life[i] <= 0) {
+        if (carry < 1) { col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = 0; continue; }
+        carry -= 1;
+        const side = Math.random() < .5 ? 1 : -1, s = .9 + Math.random() * .09, h = H.T;
+        const x = lerp(H.xStern(h), H.xStem(h), s), z = side * (H.half(s, h) + .2);
+        pos[i * 3] = x; pos[i * 3 + 1] = .2; pos[i * 3 + 2] = z;
+        vel[i * 3] = (.5 + Math.random()) * sog * .12; vel[i * 3 + 1] = (2.5 + Math.random() * 3.5) * k;
+        vel[i * 3 + 2] = side * (1 + Math.random() * 2.5) * (.5 + k); life[i] = .7 + Math.random() * .8;
+      } else {
+        life[i] -= dt; vel[i * 3 + 1] -= 9.8 * dt;
+        pos[i * 3] += vel[i * 3] * dt; pos[i * 3 + 1] += vel[i * 3 + 1] * dt; pos[i * 3 + 2] += vel[i * 3 + 2] * dt;
+        if (pos[i * 3 + 1] < 0) life[i] = 0;
+        const a = clamp(life[i] / .9, 0, 1) * .6;
+        col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = a;
+      }
+    }
+    geo.attributes.position.needsUpdate = true; geo.attributes.color.needsUpdate = true;
+  }
+  return {points: pts, update};
+}
 function buildWake(H, foam, sea) {
   const g = new THREE.Group(), mats = [];
   const xS = -H.L / 2, n = 60;
@@ -592,9 +707,20 @@ function buildWake(H, foam, sea) {
     const m = foamMaterial(foam, sea); mats.push(m);
     g.add(new THREE.Mesh(ribbon(pts, w, f, 25), m));
   }
+  // foam collar: a narrow white skirt along both sides of the hull at the waterline
+  for (const side of [1, -1]) {
+    const pts = [], w = [], f = [], nc = 50;
+    for (let i = 0; i <= nc; i++) {
+      const s = lerp(.985, .1, i / nc), h = H.T, x = lerp(H.xStern(h), H.xStem(h), s);
+      pts.push([x, side * (H.half(s, h) + .5)]); w.push(.7 + 1.0 * Math.pow(1 - i / nc, 2)); f.push(.45 + .5 * Math.pow(1 - i / nc, 1.5));
+    }
+    const m = foamMaterial(foam, sea); mats.push(m);
+    g.add(new THREE.Mesh(ribbon(pts, w, f, 18), m));
+  }
   g.children.forEach(c => { c.renderOrder = 2; });
   mats.forEach(setXs);
-  return {group: g, mats};
+  const spray = buildSpray(H); g.add(spray.points);
+  return {group: g, mats, spray};
 }
 
 function buildAnchorChain(H) {
@@ -619,7 +745,8 @@ function buildShip(v) {
     ? {topside: "#3c2b2b", bottom: "#7d2a24", deck: "#7a3b2f", stripe: false}
     : {topside: "#223a5c", bottom: "#9a2f25", deck: "#56615d", stripe: true});
   const root = new THREE.Group();
-  const hull = buildHull(H, colours); root.add(hull);
+  const hull = buildHull(H, colours, SHIP_NAMES[[...String(v.code || v.name)].reduce((a, c) => a + c.charCodeAt(0), 0) % SHIP_NAMES.length]); root.add(hull);
+  root.add(buildRailings(H));
 
   // Layout: big container ships (>= 350 m) carry the bridge forward with the
   // funnel aft; everything else has accommodation and funnel together aft.
@@ -1297,6 +1424,7 @@ export function createShipView(container) {
     if (!anchored) {
       const off = t * P.sog * .012;
       wake.mats.forEach(m => { m.uniforms.offset.value = off; m.uniforms.bend.value = P.turn || 0; });
+      wake.spray.update(dt, P.sog);
     }
     controls.update();
     renderer.render(scene, camera);
