@@ -7,3 +7,4 @@ pytest>=7.0
 #   websockets   - scripts/capture_ais_snapshot.py (live AIS from aisstream.io)
 #   tifffile     - GEBCO GeoTIFF bathymetry
 #   netCDF4      - GEBCO netCDF bathymetry (Esri ASCII needs nothing extra)
+shapely>=2.0
