@@ -54,6 +54,7 @@ BASIN_SHORE_NM = 0.40          # within this of the shore = basin / narrow water
 # least the terminal's maintained depth (Port.max_draught_m). Applied to the
 # proxy only - a real bathymetry file already contains the dredging.
 DREDGED_POCKET_NM = 1.0
+FAIRWAY_HALF_NM = 0.3
 
 
 # --------------------------------------------------------------------------
@@ -414,10 +415,17 @@ def find_bathymetry_file(directory: str = BATHY_DIR) -> Optional[str]:
 # --------------------------------------------------------------------------
 def dredged_pocket_mask(lats, lons, land, port) -> np.ndarray:
     """Water dredged to the terminal's depth: round the approach, round the
-    berth, and along the pilotage track between them (0.3 NM either side)."""
+    berth, along the pilotage track between them (0.3 NM either side) and
+    along the fairway from the approach to the TSS (study_area.fairway)."""
     LA, LO = np.meshgrid(lats, lons, indexing="ij")
     m = haversine_nm(LA, LO, port.app_lat, port.app_lon) <= DREDGED_POCKET_NM
     m |= haversine_nm(LA, LO, port.lat, port.lon) <= DREDGED_POCKET_NM
+    # ... and along the fairway out to the TSS (FAIRWAY_HALF_NM either side)
+    if port.kind == "terminal":
+        (a_la, a_lo), (b_la, b_lo) = SA.fairway(port.code)
+        n = max(2, int(haversine_nm(a_la, a_lo, b_la, b_lo) / 0.1) + 1)
+        for t in np.linspace(0.0, 1.0, n):
+            m |= haversine_nm(LA, LO, a_la + (b_la - a_la) * t, a_lo + (b_lo - a_lo) * t) <= FAIRWAY_HALF_NM
     for (a_la, a_lo), (b_la, b_lo) in zip(port.pilot[:-1], port.pilot[1:]):
         n = max(2, int(haversine_nm(a_la, a_lo, b_la, b_lo) / 0.1) + 1)
         for t in np.linspace(0.0, 1.0, n):

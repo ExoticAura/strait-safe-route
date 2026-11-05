@@ -28,26 +28,31 @@ python -m saferoute.serve            # opens the chart at http://127.0.0.1:8765
 | **2. Static pathfinding** | Dijkstra, A* (admissible great-circle heuristic), weighted A*, spatially distinct alternatives, Theta*-style smoothing, turn radii per waypoint (sailed track, re-search if a turn is too tight); three objectives: shortest / balanced / safest | `algorithms.py`, `network.py`, `sailing.py`, `routing.py` |
 | **3. Baseline route validation** | Paired comparison with historical voyages on distance and reliability (ships met, closest approach, hard breaches, shallow water, land), t-test + Wilcoxon | `ais.py`, `evaluation.py`, `scripts/run_pipeline.py` |
 
-## Headline results (Panamax, synthetic snapshot of 217 ships; `outputs/`)
+## Headline results (Panamax, synthetic snapshot of 207 ships; `outputs/`)
 
 All figures are measured on the **sailed track** (the legs joined by the
 turns the ship can actually make, see *How the ship turns*), not on the
 search polyline.
 
 * **Safest vs shortest**, averaged over all 16 entrance↔berth routes: ships
-  met **1.13 vs 5.00** (−78 %), NM sailed inside a target CPA **0.79 vs 3.88**,
-  for +0.08 NM (40.36 vs 40.28 NM). East entrance → Pasir Panjang berth:
-  **2 ships met instead of 15** for +0.61 NM.
-* **A\* vs Dijkstra**: identical optimal cost on every route (gap 0.0), with
-  about half the nodes expanded.
+  met **2.44 vs 7.38** (−67 %), NM sailed inside a target CPA **1.45 vs 4.98**,
+  for +0.02 NM (40.61 vs 40.59 NM). East entrance → Pasir Panjang berth:
+  **4 ships met instead of 20** for +0.22 NM.
+* **A\* vs Dijkstra**: identical optimal cost on every route (gap 0.0); A\*
+  expands **53 % fewer nodes** than Dijkstra on the 16-neighbour graph.
 * **Validation** against 320 baseline voyages (current-practice lane following
   that knows land and depth but not where ships are anchored, to the same
-  berths): planned routes are **2.1 % shorter** and meet **93 % fewer ships**
-  (safest mode; 13.3 → 0.9 per voyage, p < 0.0001); **100 %** of planned
-  routes are free of hard CPA breaches against **37 %** of baseline voyages.
+  berths): planned routes are **2.1 % shorter** and meet **84 % fewer ships**
+  (safest mode; 14.5 → 2.3 per voyage, p < 0.0001); **100 %** of planned
+  routes are free of hard CPA breaches against **33 %** of baseline voyages.
+* **Re-planning as traffic moves** (`scripts/replan_benchmark.py`, 384
+  re-plans, 207 anchored + 40 moving simulated ships, 2-core 2.1 GHz Xeon):
+  a full re-plan (traffic, obstacle field, graph, search, sail, measure)
+  takes **0.63 s median, 1.6 s 95th percentile, 2.1 s worst** - under a
+  quarter of a 10 s cycle. Every re-plan found a feasible route.
 * **Turning**: every route, for every ship class, is sailable: no turn tighter
   than 1.5 ship lengths at sea (1 L in pilotage waters). The sailed track is
-  at most 300 m off the planned legs.
+  at most 200 m off the planned legs.
 * **Every terminal route ends on a berth** (see *Berths*), not in open water.
 
 The baseline corpus and the ship snapshot are **synthetic** until real AIS is
@@ -136,6 +141,23 @@ Types can be ignored with the tick-boxes on the *Ship snapshot* card.
 | Port approaches & fairways | 0.20 NM | 0.50 NM |
 | Berthing basins & narrow water | 0.05 NM | 0.22 NM |
 
+## Coastline
+
+`src/saferoute/data/sg_land.geojson` is built in three layers:
+
+1. OpenStreetMap land polygons, 2017 extract (ODbL);
+2. plus reclaimed land wherever 2026 OSM building footprints stand outside it;
+3. plus **land reclaimed 2016-2025 detected from Sentinel-2** (persistent
+   water → land, 10 m pixels) - 20.8 km² not in layers 1-2, of which 8.4 km²
+   at **Tuas Port** (its new finger piers and yards) and 11.2 km² at Changi /
+   the east coast. `python scripts/update_coastline.py reclamation.gpkg`;
+   polygons from github.com/papersheep025/sg-reclamation-habitat (contains
+   modified Copernicus Sentinel data).
+
+Each terminal's **fairway** - from its approach to the nearest point of the
+TSS - is treated as dredged (0.3 NM either side) and kept free of the
+synthetic anchored ships, as port fairways are.
+
 ## Berths
 
 Every route to or from a terminal starts or ends **on a berth**, 40 m off the
@@ -143,7 +165,7 @@ quay line (the ship alongside), reached by a pilotage track:
 
 | Terminal | Berth | Pilotage track |
 |---|---|---|
-| Tuas Port | west wharf | 0.9 NM |
+| Tuas Port | middle finger pier, south berth | 1.4 NM |
 | Jurong Port | main wharf | 2.7 NM |
 | Pasir Panjang | inner basin, east quay | 1.8 NM |
 | Keppel / Brani | Brani north-east wharf | 1.5 NM |
@@ -253,7 +275,9 @@ shore, not good enough to find shoals. To use real depths:
 | `python scripts/capture_ais_snapshot.py` | live AIS snapshot → `data/ais/latest.csv` |
 | `python scripts/run_pipeline.py --out outputs [--snapshot ais:latest.csv] [--voyages real.csv]` | all three scope items, every table |
 | `python scripts/make_figures.py` | F1–F4 for the report |
-| `python -m pytest tests -q` | 51 tests |
+| `python scripts/replan_benchmark.py [--ais day.csv]` | re-planning every 10 / 30 s as traffic moves → `outputs/s4_replan_*.csv` |
+| `python scripts/update_coastline.py reclamation.gpkg` | add reclaimed land to the coastline |
+| `python -m pytest tests -q` | 57 tests |
 | `python scripts/export_web_data.py` | rebuild `web_static/data.json` for the in-browser version |
 
 `python scripts/export_3d_world.py --osm <singapore-driving>/public/data` rebuilds
@@ -275,9 +299,8 @@ See **Deploying to Railway** below.
   A real AIS voyage was sailed among the ships present at *its* time, not the
   snapshot's; validate against voyages from the same period as the snapshot.
 * The coastline is an **OpenStreetMap land extract from 2017** (ODbL), topped
-  up with 12.9 km² of newer reclaimed land wherever 2026 OSM building
-  footprints stand outside it (Tuas, Pulau Bukom and others). Reclaimed areas
-  with no buildings yet are still missing.
+  up with newer reclaimed land from 2026 OSM buildings and from Sentinel-2
+  (2016-2025, see *Coastline*). Reclamation after 2025 is missing.
 * Depth is a **proxy** until GEBCO is supplied; terminal maintained depths
   (Tuas 23 m, Jurong 15.7 m, Pasir Panjang 16 m, Keppel 15 m) are planning
   assumptions in `study_area.py`.
@@ -303,6 +326,6 @@ src/saferoute/
   data/sg_land.geojson   OSM land polygons for the study area
   web/            index.html app.js map.js ship3d.js style.css vendor/
 scripts/          capture_ais_snapshot.py run_pipeline.py make_figures.py
-tests/            51 tests
+tests/            57 tests
 data/ais/         real snapshots go here      data/bathymetry/   GEBCO goes here
 ```

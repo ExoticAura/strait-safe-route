@@ -248,11 +248,24 @@ def plan_route(net: NavNetwork, origin, destination, snap: Optional[Snapshot],
     quays = tuple(SA.PORTS[x].quay_hdg if p else None for x, p in zip((origin, destination), pilot))
     t0 = time.perf_counter()
     best = None
+    rad, last_block = 1, None
     for push in range(max_pushes + 1):
         net_a = net if not blocked.any() else _pushed_off(net, base_nav, blocked)
         results = [r for r in _search(net_a, src, dst, algorithm, alternatives) if r.found]
         if not results:
-            break                     # closed too much water: keep the best so far
+            if last_block is None or rad == 0:
+                break                 # closed too much water: keep the best so far
+            # closing the 3x3 block cut the way through: reopen it, close
+            # only the waypoint's own cell, and search again
+            blocked[:] = last_block
+            rad = 0
+            for _, tr in last_sailed:
+                for i in tr["too_tight"]:
+                    y, x = g.to_index(*tr["legs"][i])
+                    blocked[y, x] = True
+            blocked &= ~keep
+            last_block = None
+            continue
         sailed = []
         total_bad = 0
         for r in results:
@@ -266,11 +279,13 @@ def plan_route(net: NavNetwork, origin, destination, snap: Optional[Snapshot],
             break
         # close the water round each waypoint the ship cannot turn at, so the
         # next search swings wider there
-        rad = 1
+        # (wider each time: a narrow block can just slide the kink one cell)
+        last_block, last_sailed = blocked.copy(), sailed
+        rr = rad + push if rad else 0
         for _, tr in sailed:
             for i in tr["too_tight"]:
                 y, x = g.to_index(*tr["legs"][i])
-                blocked[max(0, y - rad):y + rad + 1, max(0, x - rad):x + rad + 1] = True
+                blocked[max(0, y - rr):y + rr + 1, max(0, x - rr):x + rr + 1] = True
         blocked &= ~keep
     search_s = time.perf_counter() - t0
     plans = []

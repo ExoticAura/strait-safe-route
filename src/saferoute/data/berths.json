@@ -1,27 +1,27 @@
 {
  "SGTUA": {
-  "name": "Tuas Port - west wharf",
+  "name": "Tuas Port - middle finger pier, south berth",
   "vessel_class": "ULCS",
   "quay": [
-   1.236197,
-   103.612047
+   1.245071,
+   103.635
   ],
-  "quay_hdg": 354.5,
+  "quay_hdg": 243.9,
   "berth": [
-   1.236162,
-   103.611689
+   1.244746,
+   103.635158
   ],
   "pilot": [
    [
-    1.244162,
-    103.598889
+    1.240346,
+    103.658758
    ],
    [
-    1.236162,
-    103.611689
+    1.244746,
+    103.635158
    ]
   ],
-  "pilot_nm": 0.91
+  "pilot_nm": 1.44
  },
  "SGJUR": {
   "name": "Jurong Port - main wharf",

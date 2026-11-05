@@ -108,6 +108,24 @@ if os.path.exists(_BERTHS):
                                pilot=tuple(tuple(x) for x in _b["pilot"]))
 
 TERMINALS = [c for c, p in PORTS.items() if p.kind == "terminal"]
+
+
+def fairway(code: str) -> List[Tuple[float, float]]:
+    """A terminal's fairway: straight from its approach (the start of the
+    pilotage track) to the nearest point of the TSS centreline. Port fairways
+    are dredged and kept free of anchored ships; the board uses this to dredge
+    the corridor (seagrid) and the synthetic snapshot keeps ships out of it."""
+    import math
+    p = PORTS[code]
+    best, bp = float("inf"), None
+    for (a_la, a_lo), (b_la, b_lo) in zip(TSS_CENTRELINE[:-1], TSS_CENTRELINE[1:]):
+        for k in range(41):
+            t = k / 40
+            la, lo = a_la + (b_la - a_la) * t, a_lo + (b_lo - a_lo) * t
+            d = math.hypot(la - p.app_lat, (lo - p.app_lon) * math.cos(math.radians(la)))
+            if d < best:
+                best, bp = d, (la, lo)
+    return [p.approach, bp]
 GATEWAYS = [c for c, p in PORTS.items() if p.kind == "gateway"]
 
 # Every question the project asks: in from either entrance to every terminal,

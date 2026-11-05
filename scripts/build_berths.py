@@ -45,7 +45,7 @@ OUT = os.path.join(ROOT, "src", "saferoute", "data", "berths.json")
 # and the pilotage start - open water outside the terminal that the route
 # network reaches (the terminal's previous approach position).
 REFS = {
-    "SGTUA": ((1.2360, 103.6100), "Tuas Port - west wharf", (1.2450, 103.5980)),
+    "SGTUA": ((1.2440, 103.6350), "Tuas Port - middle finger pier, south berth", (1.2400, 103.6600)),
     "SGJUR": ((1.2980, 103.7190), "Jurong Port - main wharf", (1.2630, 103.7400)),
     "SGPPT": ((1.2640, 103.7800), "Pasir Panjang - inner basin, east quay", (1.2700, 103.7500)),
     "SGKEP": ((1.2615, 103.8405), "Brani Terminal - north-east wharf", (1.2460, 103.8620)),

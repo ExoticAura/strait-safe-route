@@ -453,16 +453,20 @@ def synthetic_snapshot(grid, seed: int = 20260929, density: float = 1.0,
 
     Rejection sampling inside each anchorage disc, subject to: water at least
     0.15 NM off the shore, outside the TSS lanes and separation zone, clear of
-    the terminal approach positions, and swing circles that do not overlap an
+    the terminal approaches, pilotage tracks and fairways to the TSS, and
+    swing circles that do not overlap an
     existing ship's (MPA's anchorage rules exist to prevent exactly that).
     All ships lie to one tidal stream heading +/- 15 deg, as they do at anchor.
     """
     rng = np.random.default_rng(seed)
     ships: List[ShipObstacle] = []
-    # keep the terminal approaches and the pilotage tracks to the berths clear
+    # keep clear: the terminal approaches, the pilotage tracks to the berths,
+    # and a fairway from each terminal approach to the nearest point of the
+    # TSS (anchorages are laid out round the port fairways, not across them)
+    fair = [pt for c in SA.TERMINALS for pt in densify(SA.fairway(c), 0.1)]
     ap = np.array([p.approach for p in SA.PORTS.values()] +
                   [pt for p in SA.PORTS.values() if len(p.pilot) > 1
-                   for pt in densify(p.pilot, 0.1)])
+                   for pt in densify(p.pilot, 0.1)] + fair)
     e_lat: List[float] = []
     e_lon: List[float] = []
     e_r: List[float] = []

@@ -227,7 +227,9 @@ def sail(net, legs, model: Optional[TurnModel] = None,
         r = R[i]
         exempt = cum[i] < slack or total - cum[i] < slack
         while not exempt and r >= 5.0 and not _points_ok(net, fr, _arc(P, u, th, i, r, model.step_m), tol).all():
-            r *= model.shrink
+            nxt = r * model.shrink
+            # step onto the limit itself before going under it
+            r = floor[i] if nxt < floor[i] < r else nxt
         R[i] = r
         # a strait gateway is a boundary point, not a place the ship turns: it
         # arrives there already on course, so turns in its first 2 NM are free

@@ -474,7 +474,10 @@
       if (Math.abs(th[i]) < 1e-4) continue;
       let r = R[i];
       const exempt = cum[i] < slack || total - cum[i] < slack;
-      while (!exempt && r >= 5 && !arcOk(net, fr, arcPts(P, u, th, i, r, TURN.step_m), tol)) r *= TURN.shrink;
+      while (!exempt && r >= 5 && !arcOk(net, fr, arcPts(P, u, th, i, r, TURN.step_m), tol)) {
+        const nxt = r * TURN.shrink;
+        r = nxt < floor[i] && floor[i] < r ? floor[i] : nxt;      // step onto the limit before going under it
+      }
       R[i] = r;
       const atGate = (!pilotage[0] && cum[i] < gate) || (!pilotage[1] && total - cum[i] < gate);
       if (r < floor[i] - 1e-6 && !atGate) tooTight.push(i);
@@ -706,7 +709,16 @@
         if (yy >= 0 && yy < g.ny && xx >= 0 && xx < g.nx) keep[yy * g.nx + xx] = 1;
       }
     }
-    let best = null, anyBlocked = false;
+    let best = null, anyBlocked = false, rad = 1, lastBlock = null, lastTr = null;
+    const closeCells = (tr, rr) => {
+      for (const i of tr.tooTight) {
+        const [y, x] = g.toIndex(tr.legs[i][0], tr.legs[i][1]);
+        for (let dy = -rr; dy <= rr; dy++) for (let dx = -rr; dx <= rr; dx++) {
+          const yy = y + dy, xx = x + dx;
+          if (yy >= 0 && yy < g.ny && xx >= 0 && xx < g.nx && !keep[yy * g.nx + xx]) { blocked[yy * g.nx + xx] = 1; anyBlocked = true; }
+        }
+      }
+    };
     for (let push = 0; push <= maxPushes; push++) {
       let netA = net;
       if (anyBlocked) {
@@ -717,18 +729,19 @@
         netA = Object.assign({}, net, {nav, knightNav: net.nav});
       }
       const r = search(netA, src, dst, algorithm !== "dijkstra");
-      if (!r.found) break;
+      if (!r.found) {
+        if (!lastBlock || rad === 0) break;            // closed too much water: keep the best so far
+        // as in routing.py: the 3x3 block cut the way through - reopen it and
+        // close only the waypoint's own cell
+        blocked.set(lastBlock); rad = 0; closeCells(lastTr, 0); lastBlock = null;
+        continue;
+      }
       const raw = coordsOf(net, r.path), sm = withBerths(smooth(netA, raw));
       const tr = sailLegs(net, sm, pilotZone(sm), quays);
       if (!best || tr.tooTight.length < best.tr.tooTight.length) best = {r, raw, tr, push};
       if (!tr.tooTight.length) break;
-      for (const i of tr.tooTight) {
-        const [y, x] = g.toIndex(tr.legs[i][0], tr.legs[i][1]);
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-          const yy = y + dy, xx = x + dx;
-          if (yy >= 0 && yy < g.ny && xx >= 0 && xx < g.nx && !keep[yy * g.nx + xx]) { blocked[yy * g.nx + xx] = 1; anyBlocked = true; }
-        }
-      }
+      lastBlock = blocked.slice(); lastTr = tr;
+      closeCells(tr, rad ? rad + push : 0);      // wider each time: a narrow block can just slide the kink
     }
     if (!best) return null;
     const {r, raw, tr, push} = best;
