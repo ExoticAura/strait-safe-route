@@ -1,0 +1,44 @@
+  [cache] board (211, 526) at 0.002 deg, depth: bathymetry_file (11.6 s)
+grid (211, 526) bbox 1.03 1.4500000000000004 103.4 104.44999999999756 | depth source: gebco_2026_n1.45_s1.03_w103.4_e104.45_ascii.asc
+
+DEPTHS A: features 4166 in bbox: 4070
+ vertical datum: {None: 4166}
+ cells covered: 9665 of 110986 (9% of grid, 13% of sea cells)
+ model depth (GEBCO+pockets) vs DepthsA mid-range: n=8645 MAE=8.7 m bias=-5.4 m
+   model deeper than DepthsA's DEEPEST value (DRVAL2) in 13.4% of cells; shallower than DRVAL1 in 47.7%
+ model >=15 m cells: 5044; charted deepest <15 m in 149 (3.0%); charted shallowest <10 m in 146
+ charted >=15 m everywhere (DRVAL1>=15): 6119 cells; model <15 in 1514 (24.7%)
+  Jurong/PasirPanjang approach   n= 2612 MAE=10.2 bias=-7.2  deeper-than-DRVAL2: 12%
+  Tuas                           n=  799 MAE=5.6 bias=-2.8  deeper-than-DRVAL2: 13%
+  Main strait central            n=  346 MAE=11.6 bias=-6.7  deeper-than-DRVAL2: 18%
+  East gateway                   n=   66 MAE=8.2 bias=-0.6  deeper-than-DRVAL2: 41%
+
+COASTLINE A: features 450 SORDAT: [('20250814', 159), ('20210820', 89), ('20220929', 64)]
+ CATSLC: [('pier (jetty)', 293), ('ramp', 54), ('slipway', 35), (None, 31), ('landing steps', 14), ('breakwater', 10)]
+ WATLEV: [('always dry', 424), ('covers and uncovers', 16), ('always under water/submerged', 9), (None, 1)]
+
+=========== layers, lanes, coastline, hazards, berths ===========
+DepthsA chart cells: {'SG5..4044': 221, 'SG5..C403': 3557, 'SG5..C404': 388}
+CoastlineA chart cells: {'SG5..4044': 45, 'SG5..C403': 338, 'SG5..C404': 67}
+TracksAndRoutesA chart cells: {'SG5..C403': 41, 'SG5..C404': 8}
+DangersP chart cells: {'SG5..4044': 40, 'SG5..C403': 220, 'SG5..C404': 93}
+PortsAndServicesP chart cells: {'SG5..4044': 71, 'SG5..C403': 674, 'SG5..C404': 37}
+RegulatedAreasAndLimitsA chart cells: {'SG5..4044': 22, 'SG5..C403': 265, 'SG5..C404': 83}
+DepthsA union bounds [103.601, 1.15, 104.119, 1.478] area share of bbox 8.7%
+
+TRACKS A: CATTSS Counter({None: 26, 'not IMO - adopted': 23})
+ TRAFIC Counter({None: 30, 'two-way': 18, 'one-way': 1})
+ L CATTRK Counter({None: 31, 'based on a system of fixed marks': 9, 'not based on a system of fixed marks': 1})  CATNAV Counter({None: 24, 'leading line bearing a recommended track': 11, 'transit line': 4, 'clearing line': 2})
+
+CoastlineA bounds [103.606, 1.16, 104.043, 1.472]
+model land km2 2136
+pier/jetty/breakwater cells 12; model marks 17% of them as land
+
+DANGERS P in bbox 322 of 353
+ WATLEV Counter({'always under water/submerged': 273, None: 33, 'awash': 8, 'covers and uncovers': 7, 'partly submerged at high water': 1})
+ CATOBS [(None, 271), ('foul ground', 31), ('foul area', 20)]  CATWRK [(None, 282), ('dangerous wreck', 37), ('non-dangerous wreck', 2), ('wreck showing any portion of hull or superstructure', 1)]
+ VALSOU m: n=289, <10 m: 175, <15 m: 218
+ hazards shallower than 15 m sitting in model cells >=15 m deep: 34
+
+BERTH points named: 354
+ terminals: [('Pasir Panjang Terminal (PSA Singapore Terminals)', 41), ('Vopak Terminals Singapore Pte Ltd', 19), ('Jurong Terminal (Jurong Port Pte Ltd)', 19), ('Sembcorp Marine Tuas Shipyard', 17), ('Tuas F2 Terminal', 16), ('Aster Bukom Chemicals and Energy Complex', 16), ('Jurong Port Universal Terminal Pte Ltd', 15), ('Advario Singapore Chemical Pte Ltd', 15), ('Keppel Terminal', 15), ('Loyang', 14), ('Pulau Busing Tankstore Pte Ltd', 11), ('Sembawang Shipyard', 10)]
