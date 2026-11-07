@@ -91,7 +91,9 @@ def meta_payload() -> Dict[str, Any]:
                     berth_lat=p.lat, berth_lon=p.lon, kind=p.kind,
                     max_draught_m=p.max_draught_m, berth_name=p.berth_name,
                     quay_hdg=None if p.kind != "terminal" else p.quay_hdg,
-                    pilot=[list(x) for x in p.pilot]) for c, p in SA.PORTS.items()],
+                    pilot=[list(x) for x in p.pilot],
+                    berths=SA.BERTH_OPTIONS.get(c, [])) for c, p in SA.PORTS.items()],
+        berth_source=SA.BERTH_SOURCE,
         anchorages=[dict(code=c, name=n, charted_m=d, lat=la, lon=lo,
                          use=SA.anchorage_use(c)) for c, n, d, la, lo in SA.ANCHORAGE_POINTS],
         pilot_boarding=[dict(code=c, name=n, lat=la, lon=lo)

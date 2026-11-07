@@ -115,11 +115,11 @@
     map.createPane("labels").style.zIndex = 350;
     map.getPane("labels").style.pointerEvents = "none";
     const G = {};
-    ["depth", "land", "board", "tss", "anch", "env", "ships", "routes", "enc", "ports", "own"]
+    ["depth", "mdepth", "land", "board", "tss", "mtrk", "anch", "mhaz", "mberth", "env", "ships", "routes", "enc", "ports", "own"]
       .forEach(k => { G[k] = L.layerGroup().addTo(map); });
     const st = {meta: null, ships: null, result: null, sel: 0, dark: false, basemap: opts.basemap || "simple",
                 layers: {}, tiles: null, labels: null, seamark: null, board: null, boardImg: null,
-                depthImg: null, own: null, highlight: null};
+                depthImg: null, own: null, highlight: null, mpa: null};
 
     /* ---------------- basemap ---------------- */
     function clearTiles() {
@@ -207,6 +207,84 @@
         L.circleMarker([p.lat, p.lon], {radius: 3.5, color: css("--anch"), weight: 1.5, fillOpacity: 0})
           .bindTooltip(`<b>${p.code}</b> ${p.name}`, {sticky: true}).addTo(G.anch);
       });
+    }
+
+    /* ---------------- MPA chart layers (mpa.json) ---------------- */
+    const MPA_BANDS = [[0, "#c9a86a", "drying / < 0 m"], [2, "#e7f0f7", "0 – 5 m"], [5, "#cfe3f1", "5 – 10 m"],
+                       [10, "#a9cde8", "10 – 15 m"], [15, "#7fb3dc", "15 – 20 m"], [20, "#5596cb", "20 – 30 m"],
+                       [30, "#2f73b0", "30 m +"]];
+    function bandColour(d) {
+      if (d == null || d <= 0) return MPA_BANDS[0][1];
+      let c = MPA_BANDS[1][1];
+      MPA_BANDS.forEach(([lo, col]) => { if (d >= lo && lo > 0) c = col; });
+      return d < 5 ? MPA_BANDS[1][1] : c;
+    }
+    const ll = cs => cs.map(c => [c[1], c[0]]);
+    function eachPart(g, fn) {
+      const t = g.type, c = g.coordinates;
+      if (t === "Point") fn("pt", c);
+      else if (t === "MultiPoint") c.forEach(x => fn("pt", x));
+      else if (t === "LineString") fn("ln", c);
+      else if (t === "MultiLineString") c.forEach(x => fn("ln", x));
+      else if (t === "Polygon") fn("pg", c);
+      else if (t === "MultiPolygon") c.forEach(x => fn("pg", x));
+    }
+    function drawMpa() {
+      ["mdepth", "mtrk", "mhaz", "mberth"].forEach(k => G[k].clearLayers());
+      const M = st.mpa;
+      if (!M) return;
+      if (st.layers.mdepth) M.depth.features.forEach(f => {
+        const p = f.properties, col = bandColour(p.d1);
+        const tip = p.dredged ? `<b>Dredged area</b> &middot; maintained ${p.d1} m${p.name ? "<br>" + p.name : ""}`
+                              : `<b>Charted depth</b> ${p.d1} – ${p.d2 ?? "?"} m<br><span style="opacity:.75">the router counts ${Math.max(p.d1, 0)} m (shallow end)</span>`;
+        eachPart(f.geometry, (k, c) => {
+          if (k !== "pg") return;
+          L.polygon(c.map(ll), {stroke: !!p.dredged, color: "#1f5f99", weight: .6, dashArray: p.dredged ? "3 3" : null,
+                                fillColor: col, fillOpacity: st.dark ? .55 : .65})
+            .bindTooltip(tip, {sticky: true}).addTo(G.mdepth);
+        });
+      });
+      if (st.layers.mtrk) M.tracks.features.forEach(f => {
+        const p = f.properties;
+        const tip = `<b>${p.kind}</b>${p.orient != null ? ` &middot; ${p.orient}°` : ""}${p.traffic ? ` &middot; ${p.traffic}` : ""}` +
+                    `${p.depth != null ? `<br>depth ${p.depth} m` : ""}${p.name ? "<br>" + p.name : ""}${p.inform ? `<br><span style="opacity:.75">${p.inform}</span>` : ""}`;
+        eachPart(f.geometry, (k, c) => {
+          if (k === "pg") L.polygon(c.map(ll), {color: "#8a3ffc", weight: 1.2, fillColor: "#8a3ffc", fillOpacity: .08})
+            .bindTooltip(tip, {sticky: true}).addTo(G.mtrk);
+          else if (k === "ln") L.polyline(ll(c), {color: "#8a3ffc", weight: 1.6, dashArray: "8 5"})
+            .bindTooltip(tip, {sticky: true}).addTo(G.mtrk);
+          else L.circleMarker([c[1], c[0]], {radius: 3, color: "#8a3ffc", weight: 1.5, fillOpacity: 0})
+            .bindTooltip(tip).addTo(G.mtrk);
+        });
+      });
+      if (st.layers.mhaz) M.hazards.features.forEach(f => {
+        const p = f.properties, col = p.routed ? css("--bad") : "#8c8c8c";
+        const tip = `<b>${p.kind}</b>${p.depth != null ? ` &middot; least depth ${p.depth} m` : " &middot; depth unknown"}` +
+                    `<br>${p.routed ? "the router keeps out of water shallower than the ship needs here" : "shown only (not routed round)"}` +
+                    `${p.name ? "<br>" + p.name : ""}${p.inform ? `<br><span style="opacity:.75">${p.inform}</span>` : ""}`;
+        eachPart(f.geometry, (k, c) => {
+          if (k === "pt") L.circleMarker([c[1], c[0]], {radius: map.getZoom() >= 14 ? 4.5 : 3, color: "#fff", weight: 1,
+                                                       fillColor: col, fillOpacity: .95}).bindTooltip(tip).addTo(G.mhaz);
+          else if (k === "ln") L.polyline(ll(c), {color: col, weight: 2}).bindTooltip(tip, {sticky: true}).addTo(G.mhaz);
+          else L.polygon(c.map(ll), {color: col, weight: 1, fillColor: col, fillOpacity: .18, dashArray: "2 3"})
+            .bindTooltip(tip, {sticky: true}).addTo(G.mhaz);
+        });
+      });
+      if (st.layers.mberth) {
+        const z = map.getZoom();
+        M.berths.features.forEach(f => {
+          const p = f.properties, c = f.geometry.coordinates;
+          const pick = opts.berthLookup && opts.berthLookup(p.name);
+          const m = L.circleMarker([c[1], c[0]], {radius: pick ? (z >= 14 ? 5 : 3.5) : 2.5, weight: 1.2, color: "#fff",
+            fillColor: pick ? "#0b8f6a" : "#6b7a86", fillOpacity: 1});
+          m.bindTooltip(`<b>${p.name}</b>${pick ? `<br>${pick.depthText}<br><i>click to sail here</i>` : ""}`,
+                        {direction: "top"});
+          if (pick && opts.onBerthClick) m.on("click", () => opts.onBerthClick(pick.code, pick.id));
+          m.addTo(G.mberth);
+          if (pick && z >= 15) L.tooltip({permanent: true, direction: "right", offset: [5, 0], className: "anch-label"})
+            .setLatLng([c[1], c[0]]).setContent(pick.id).addTo(G.mberth);
+        });
+      }
     }
 
     /* ---------------- ships ---------------- */
@@ -298,7 +376,7 @@
                                interactive: false}).addTo(G.ports);
         const m = L.circleMarker(at, {radius: on ? 6 : 4, weight: 2, color: "#ffffff",
           fillColor: on ? css("--ink") : css("--ink-2"), fillOpacity: 1});
-        const nm = p.berth_name ? `${p.name} · berth` : p.name;
+        const nm = p.berth_name || p.name;
         const lab = on ? (p.code === r.origin ? "FROM " : "TO ") + nm : nm;
         m.bindTooltip(lab, {permanent: true, direction: "right", offset: [8, 0],
                             className: on ? "port-label on" : "port-label"});
@@ -377,10 +455,11 @@
     map.on("zoomend", () => {
       const big = map.getZoom() >= 13.5;
       if (big !== lastBig) { lastBig = big; drawShips(); drawAnch(); drawRoutes(); if (st.own) setOwn(st.own); }
+      if (st.mpa && (st.layers.mberth || st.layers.mhaz)) { G.mberth.clearLayers(); drawMpa(); }
     });
     map.on("zoomend moveend", updateScale);
 
-    function redrawAll() { drawLand(); drawDepth(); drawBoard(); drawTss(); drawAnch(); drawShips(); drawRoutes(); drawPorts(); }
+    function redrawAll() { drawLand(); drawDepth(); drawMpa(); drawBoard(); drawTss(); drawAnch(); drawShips(); drawRoutes(); drawPorts(); }
     const api = {
       map,
       setMeta(meta) {
@@ -390,6 +469,9 @@
         api.fitAll(); applyBasemap(); redrawAll();
       },
       setShips(ships) { st.ships = ships; drawShips(); },
+      setMpa(m) { st.mpa = m; drawMpa(); },
+      redrawMpa() { drawMpa(); },
+      MPA_BANDS,
       setBoard(board) { st.board = board; st.boardImg = null; drawBoard(); },
       setResult(result, sel) { st.result = result; st.sel = sel || 0; drawRoutes(); drawPorts(); drawShips(); },
       setSelected(sel) { st.sel = sel; drawRoutes(); drawShips(); drawPorts(); },

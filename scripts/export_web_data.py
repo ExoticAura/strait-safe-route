@@ -1,6 +1,7 @@
 """Export everything the in-browser version needs into one JSON file.
 
-    python scripts/export_web_data.py --out web_static/data.json
+    python scripts/export_web_data.py            # -> web_static/data.json
+                                                 #    (data_mpa.json + mpa.json with MPA data)
 
 The static page (web_static/) runs the same board, search and metrics in
 JavaScript, so it can be played with in a browser without the Python server.
@@ -20,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "src"))
 import numpy as np                                                   # noqa: E402
 
 from saferoute import cache, network as NW, obstacles as O, study_area as SA, viz   # noqa: E402
-from saferoute import serve                                          # noqa: E402
+from saferoute import serve, mpa                                     # noqa: E402
 
 
 def b64(a: np.ndarray) -> str:
@@ -29,8 +30,12 @@ def b64(a: np.ndarray) -> str:
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="web_static/data.json")
+    ap.add_argument("--out", default=None,
+                    help="default web_static/data.json, or web_static/data_mpa.json when the "
+                         "MPA layers are in data/gss (that file and mpa.json are git-ignored)")
     a = ap.parse_args(argv)
+    use_mpa = mpa.enabled()
+    a.out = a.out or ("web_static/data_mpa.json" if use_mpa else "web_static/data.json")
     g = cache.grid(quiet=True)
     meta = serve.meta_payload()
     meta.pop("snapshots", None)
@@ -44,6 +49,8 @@ def main(argv=None):
         tss_heading_d10=b64(heading),
         cpa_zone=b64(g.cpa_zone.astype(np.uint8)),
     )
+    if g.charted is not None:
+        layers["charted"] = b64(g.charted.astype(np.uint8))
     snap = cache.snapshot("synthetic", quiet=True)
     ships = []
     for s in snap.ships:
@@ -61,6 +68,56 @@ def main(argv=None):
     with open(a.out, "w") as fh:
         json.dump(out, fh, separators=(",", ":"))
     print(a.out, os.path.getsize(a.out) // 1024, "KB")
+    if use_mpa:
+        disp = os.path.join(os.path.dirname(a.out) or ".", "mpa.json")
+        with open(disp, "w") as fh:
+            json.dump(mpa_display(), fh, separators=(",", ":"))
+        print(disp, os.path.getsize(disp) // 1024, "KB")
+
+
+def mpa_display() -> dict:
+    """MPA chart layers for the map (simplified to ~3 m, coordinates to 5 dp)."""
+    from shapely.geometry import mapping, shape
+
+    def geo(gm, tol=0.00003):
+        gm = gm.simplify(tol, preserve_topology=True) if gm.geom_type != "Point" else gm
+        def rnd(c):
+            return [rnd(x) for x in c] if isinstance(c[0], (list, tuple)) else [round(c[0], 5), round(c[1], 5)]
+        m = mapping(gm)
+        return {"type": m["type"], "coordinates": rnd(m["coordinates"])}
+
+    def fc(items):
+        return {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": p, "geometry": geo(gm)} for gm, p in items]}
+
+    depth = []
+    for f in mpa.features("depthsa"):
+        p = f["properties"]
+        dredged = p.get("FCSubtype") == mpa.DRGARE
+        depth.append((shape(f["geometry"]), dict(
+            d1=p.get("DRVAL1"), d2=None if dredged else p.get("DRVAL2"), dredged=dredged,
+            name=p.get("OBJNAM") or "")))
+    hz = [(h["geom"], dict(depth=h["depth"], kind=h["kind"], name=h["name"], inform=h["inform"],
+                           routed=h["depth"] is not None)) for h in mpa.hazards()]
+    tracks = []
+    for layer in ("tracksandroutesa", "tracksandroutesl"):
+        for f in mpa.features(layer):
+            p = f["properties"]
+            kind = (p.get("CATTSS_TXT") and "traffic lane (" + p["CATTSS_TXT"] + ")") or \
+                   (p.get("CATNAV_TXT")) or (p.get("CATTRK_TXT") and "recommended track") or \
+                   ("fairway" if layer.endswith("a") else "track")
+            tracks.append((shape(f["geometry"]), dict(
+                kind=kind, orient=p.get("ORIENT"), traffic=p.get("TRAFIC_TXT"),
+                depth=p.get("DRVAL1"), name=p.get("OBJNAM") or "",
+                inform=(p.get("INFORM") or "")[:200], area=layer.endswith("a"))))
+    berths = []
+    for f in mpa.features("portsandservicesp"):
+        p = f["properties"]
+        n = p.get("OBJNAM") or ""
+        if "Berth" in n or n.startswith(("Pasir Panjang Terminal", "Keppel Terminal", "Brani Terminal")):
+            berths.append((shape(f["geometry"]).centroid, dict(name=n)))
+    return dict(source=f"MPA GeoSpace-Sea (IHO S-57 extracts, {mpa.source_date()}); not for navigation",
+                depth=fc(depth), hazards=fc(hz), tracks=fc(tracks), berths=fc(berths))
 
 
 if __name__ == "__main__":

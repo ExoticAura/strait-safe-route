@@ -193,6 +193,12 @@ def build_board(grid: SeaGrid, vessel: SA.VesselClass, cfg: WeightConfig,
     # Same lattice argument for depth and shore: a cell is only deep enough if
     # its neighbours are too, since a leg between centres crosses them.
     depth_min = ndimage.minimum_filter(grid.depth_m, size=3, mode="nearest")
+    if grid.charted is not None:
+        # MPA-charted cells already take the depth over most of the cell from
+        # 6 x 6 sample points (mpa.depth_raster) and every edge stays inside
+        # navigable cells (knight moves need both cells they cross), so the
+        # neighbour minimum would only close dredged channels 2-3 cells wide.
+        depth_min = np.where(grid.charted, grid.depth_m, depth_min)
     board[grid.dist_to_land_nm - lattice_margin < req_s] = SHORE
     board[depth_min < req_d] = SHALLOW
     board[grid.land] = LAND
@@ -412,12 +418,19 @@ def segment_cost(net: NavNetwork, a, b, short_leg_factor: float = 1.6):
     """(cost, distance, feasible) of a straight leg, under the graph's objective."""
     g = net.grid
     dy_nm, dx_nm = g.cell_size_nm()
-    step = 0.4 * min(dy_nm, dx_nm)
+    # MPA-charted water has no neighbour-depth margin (build_board), so a leg
+    # there is checked as finely as the route metrics sample the track
+    fine = g.charted is not None
+    step = (0.05 if fine else 0.4) * min(dy_nm, dx_nm)
     lat, lon, d = _sample(a, b, step)
     if d <= 1e-9:
         return 0.0, 0.0, True
     iy, ix = g.index_arrays(lat, lon)
     short = d <= short_leg_factor * math.hypot(dy_nm, dx_nm)
+    if fine:
+        ch = g.charted[iy, ix]
+        if not net.navigable[iy[ch], ix[ch]].all():
+            return math.inf, d, False
     if short:
         iy, ix = iy[[0, -1]], ix[[0, -1]]
     elif not net.navigable[iy, ix].all():

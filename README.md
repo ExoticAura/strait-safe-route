@@ -283,6 +283,52 @@ shoals and banks the proxy cannot know. Four consequences, all in the code:
 4. **Pasir Panjang's pilotage start moved** to 1.238 N 103.779 E, south-east
    of the berth, so the ship arrives without a hairpin.
 
+## MPA chart layers (optional)
+
+MPA's **GeoSpace-Sea** platform publishes its harbour-scale charts as IHO S-57
+extracts (cells SG5C4030-SG5C4044, mostly dated 14 Aug 2025). With a
+GeoSpace-Sea API key they are downloaded once and everything that uses them
+is rebuilt:
+
+```
+setx MPA_API_KEY "<key>"                 # PowerShell; new terminal afterwards
+python scripts/download_gss.py           # 14 layers -> data/gss/  (once)
+python scripts/build_mpa.py              # coastline, berths, dashboard data
+python scripts/compare_gss.py            # the chart vs the GEBCO board
+```
+
+Nothing from `data/gss` (or derived from it) is committed: the Terms of Use
+have not been checked, and the data are **not for navigation**. Without the
+files the model is exactly as before (GEBCO + OpenStreetMap); `SAFEROUTE_MPA=0`
+switches them off. On Railway, an `MPA_API_KEY` service variable makes the
+Docker build download and use them.
+
+What changes with them (`src/saferoute/mpa.py`):
+
+* **Coastline**: inside the charted area, water is the union of the depth and
+  dredged areas; holes in it are land. 195 board cells become water, 412 land.
+* **Depth**: charted cells (13% of the sea, the harbours and approaches) take
+  the shallow end of each depth band (10 of "10-15 m"), or a dredged area's
+  maintained depth, over most of the cell (6 x 6 samples); GEBCO elsewhere.
+  Charted depths are below chart datum (about the lowest tide); no tide is added.
+* **Hazards**: a wreck, rock or obstruction with a known least depth caps the
+  depth of its cell; one that is awash or a dangerous wreck closes it. Foul
+  ground of unknown depth is shown, not routed round.
+* **Berths**: every container-terminal berth MPA names (Tuas F2 T201-T216,
+  Jurong J1-J12B, Pasir Panjang P01-P41, Keppel K9-K23, Brani B1-B9: 99 with a
+  water path), placed in its own dredged area, with a pilotage track that
+  follows the deepest charted water from a start in >= 15 m water. Each berth
+  carries its maintained depth, the least charted depth on its track, and the
+  ship classes that fit. The dashboard lets you pick any of them.
+* **Dashboard**: map layers for charted depths, hazards, MPA fairways and
+  tracks, and berths (click a berth to sail to it).
+
+Known limits: the 10-15 m bands make Keppel and Jurong unreachable for the
+Neo-Panamax and ultra-large classes at chart datum; a few Panamax routes
+(3 of 48) still have one turn tighter than the turning model allows where the
+route joins the pilotage track, and are reported as not feasible rather than
+hidden.
+
 ## Commands
 
 | Command | What it does |

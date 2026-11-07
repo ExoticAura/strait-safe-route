@@ -94,6 +94,10 @@ class SeaGrid:
     depth_model: str = "shore_distance_proxy"
     depth_source: str = ""
     land_source: str = ""
+    # MPA chart layers (mpa.py), when present: cells whose depth comes from the
+    # chart, and the least depth over a charted hazard in each cell (inf = none).
+    charted: Optional[np.ndarray] = None
+    hazard_m: Optional[np.ndarray] = None
 
     @property
     def shape(self):
@@ -510,10 +514,17 @@ def build_seagrid(resolution_deg: float = SA.DEFAULT_RESOLUTION_DEG,
     `bathymetry`: "auto" uses the first file in data/bathymetry/ if there is
     one; a path uses that file; None forces the proxy.
     """
+    from . import mpa
     bbox = bbox or SA.BBOX
     lats = np.arange(bbox["lat_min"], bbox["lat_max"] + 1e-9, resolution_deg)
     lons = np.arange(bbox["lon_min"], bbox["lon_max"] + 1e-9, resolution_deg)
 
+    use_mpa = mpa.enabled() and land_geojson == LAND_GEOJSON
+    land_src = "OpenStreetMap coastline (ODbL), 2017 extract"
+    if use_mpa:
+        # the coastline corrected by MPA's charted water (see mpa.py)
+        land_geojson = mpa.land_geojson(land_geojson)
+        land_src += f", corrected by MPA GeoSpace-Sea charts ({mpa.source_date()})"
     land = rasterise_land(lats, lons, load_land_polygons(land_geojson))
 
     dy_nm = resolution_deg * NM_PER_DEG
@@ -535,7 +546,7 @@ def build_seagrid(resolution_deg: float = SA.DEFAULT_RESOLUTION_DEG,
     grid = SeaGrid(lats=lats, lons=lons, land=land, dist_to_land_nm=dist,
                    depth_m=depth, tss_zone=zone, tss_heading=heading,
                    cpa_zone=cpa, resolution_deg=resolution_deg,
-                   land_source="OpenStreetMap coastline (ODbL), 2017 extract")
+                   land_source=land_src)
 
     path = find_bathymetry_file() if bathymetry == "auto" else bathymetry
     if path:
@@ -545,4 +556,24 @@ def build_seagrid(resolution_deg: float = SA.DEFAULT_RESOLUTION_DEG,
         # basins and fairways (it shows 0-11 m at the Jurong / Pasir Panjang
         # approaches). Keep their maintained depth on top of the real grid.
         grid.depth_m = apply_dredged_pockets(lats, lons, land, grid.depth_m)
+    if use_mpa:
+        apply_mpa_chart(grid)
     return grid
+
+
+def apply_mpa_chart(grid: SeaGrid) -> None:
+    """Charted depths replace GEBCO / the proxy / the dredged pockets wherever
+    MPA's harbour charts cover a cell; charted hazards cap the depth (mpa.py)."""
+    from . import mpa
+    charted, cdepth = mpa.depth_raster(grid.lats, grid.lons, supersample=6)
+    charted &= ~grid.land
+    hz = mpa.hazard_raster(grid.lats, grid.lons)
+    d = np.where(charted, cdepth, grid.depth_m)
+    d = np.where(grid.land, 0.0, np.minimum(d, hz))
+    grid.depth_m = d
+    grid.charted = charted
+    grid.hazard_m = np.where(grid.land, np.inf, hz)
+    base = grid.depth_source or grid.depth_model
+    grid.depth_model = "mpa_chart+" + grid.depth_model
+    grid.depth_source = (f"MPA GeoSpace-Sea charted depths ({mpa.source_date()}, chart datum) "
+                         f"where charted; elsewhere {base}")

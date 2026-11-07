@@ -7,3 +7,8 @@ data/cache
 outputs/*.pdf
 build
 *.zip
+data/gss
+web_static/data_mpa.json
+web_static/mpa.json
+src/saferoute/data/berths_mpa.json
+outputs_mpa

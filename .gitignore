@@ -13,3 +13,7 @@ web_static/_test.html
 .env
 .env.*
 data/gss/
+src/saferoute/data/berths_mpa.json
+web_static/data_mpa.json
+web_static/mpa.json
+outputs_mpa/

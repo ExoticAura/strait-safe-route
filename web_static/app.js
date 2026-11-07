@@ -38,7 +38,9 @@ const nmTxt = v => v == null || !isFinite(v) ? "—" : `${fmt(v, 2)} NM · ${fmt
    chart
    ===================================================================== */
 const LAYER_IDS = {ships: "L-ships", env: "L-env", board: "L-board", depth: "L-depth",
-                   tss: "L-tss", anch: "L-anch", alt: "L-alt"};
+                   tss: "L-tss", anch: "L-anch", alt: "L-alt",
+                   mdepth: "L-mdepth", mhaz: "L-mhaz", mtrk: "L-mtrk", mberth: "L-mberth"};
+const MPA_LAYERS = ["L-mdepth", "L-mhaz", "L-mtrk", "L-mberth"];
 function readLayers() {
   const o = {};
   for (const [k, id] of Object.entries(LAYER_IDS)) o[k] = !!$("#" + id).checked;
@@ -59,6 +61,8 @@ const CM = ChartMap.create($("#chart"), {
   onEncounterClick: e => goToEncounter(e),
   onShipClick: s => { if (S.picking) return; },
   onMapClick: ll => pickPoint(ll),
+  berthLookup: name => BERTH_BY_NAME.get(name),
+  onBerthClick: (code, id) => sailToBerth(code, id),
   onBasemapFail: name => {
     syncBasemapUI();
     $("#gridinfo").textContent = `${name} map tiles could not load here (this page may block outside map servers; they load on the Railway site) — showing Chart`;
@@ -81,6 +85,7 @@ syncBasemapUI();
 Object.values(LAYER_IDS).forEach(id => $("#" + id).onchange = () => {
   CM.setLayers(readLayers());
   if (id === "L-board") { $("#boardlegend").hidden = !$("#L-board").checked; if ($("#L-board").checked) loadBoard(); }
+  if (MPA_LAYERS.includes(id)) { loadMpa(); depthKey(); }
 });
 CM.setLayers(readLayers());
 CM.setBasemap("offline");
@@ -123,6 +128,7 @@ function fillPointSelects() {
   }
 }
 ["origin", "dest"].forEach(id => $("#" + id).addEventListener("change", e => {
+  fillBerthSelect(id); berthInfo();
   if (e.target.value === "__pick") {
     S.picking = id;
     $("#pickhint").textContent = `Click the chart to set the ${id === "origin" ? "start" : "end"} point`;
@@ -136,6 +142,7 @@ $("#swap").onclick = () => {
   [S.custom.origin, S.custom.dest] = [S.custom.dest, S.custom.origin];
   fillPointSelects();
   $("#origin").value = d; $("#dest").value = o;
+  fillBerthSelect("origin"); fillBerthSelect("dest"); berthInfo();
   plan();
 };
 
@@ -556,8 +563,97 @@ async function loadBoard() {
   boardLegend();
 }
 
+/* =====================================================================
+   MPA chart: berths at each terminal, chart layers (data_mpa.json / mpa.json
+   are built only where the MPA GeoSpace-Sea files are present)
+   ===================================================================== */
+let MPA = null, mpaLoading = null;
+const BERTH_BY_NAME = new Map(), BERTH_DEFAULT = {};
+const BERTH_PREFIX = {SGTUA: ["Tuas F2 Terminal Berth "], SGJUR: ["Jurong Terminal (Jurong Port Pte Ltd) Berth "],
+  SGPPT: ["Pasir Panjang Terminal (PSA Singapore Terminals) Berth "], SGKEP: ["Keppel Terminal Berth ", "Brani Terminal Berth "]};
+function needM(v) { return v.draught_m + Math.max(1.0, 0.1 * v.draught_m); }
+function berthDepthText(b) {
+  const bd = b.berth_depth_m != null ? `berth ${b.berth_depth_m} m` : "berth depth not charted";
+  const tr = b.track_min_depth_m != null ? `approach ≥ ${b.track_min_depth_m} m` : "";
+  return [bd, tr].filter(Boolean).join(" · ") + " (chart datum)";
+}
+function initBerths() {
+  BERTH_BY_NAME.clear();
+  S.meta.ports.forEach(p => {
+    if (!p.berths || !p.berths.length) return;
+    BERTH_DEFAULT[p.code] = {berth_lat: p.berth_lat, berth_lon: p.berth_lon, berth_name: p.berth_name,
+                             quay_hdg: p.quay_hdg, pilot: p.pilot, id: p.berths.find(b => b.name === p.berth_name)?.id};
+    p.berths.forEach(b => {
+      const pre = (BERTH_PREFIX[p.code] || []).find(x => x.startsWith("Brani") === b.id.startsWith("Brani "));
+      const full = pre ? pre + b.id.replace(/^Brani /, "") : b.id;
+      BERTH_BY_NAME.set(full, {code: p.code, id: b.id, depthText: berthDepthText(b)});
+    });
+  });
+}
+function fillBerthSelect(which) {
+  const sel = $(which === "origin" ? "#oberth" : "#dberth"), code = $("#" + which).value;
+  const p = S.meta.ports.find(q => q.code === code);
+  if (!p || !p.berths || !p.berths.length) { sel.hidden = true; sel.innerHTML = ""; return; }
+  const v = vesselObj(), need = needM(v), cur = p.berths.find(b => b.name === p.berth_name);
+  sel.innerHTML = p.berths.map(b => {
+    const c = b.controlling_depth_m, fits = c != null && c >= need;
+    return `<option value="${esc(b.id)}">${esc(b.id)} · ${c != null ? c + " m" : "?"}${fits ? "" : " ✕"}</option>`;
+  }).join("");
+  sel.value = cur ? cur.id : p.berths[0].id;
+  sel.hidden = false;
+}
+function applyBerth(code, id) {
+  const p = S.meta.ports.find(q => q.code === code), b = p && p.berths.find(x => x.id === id);
+  if (!b) return;
+  // the engine reads the berth, its quay heading and the pilotage track from the port
+  Object.assign(p, {berth_lat: b.berth[0], berth_lon: b.berth[1], berth_name: b.name,
+                    quay_hdg: b.quay_hdg, pilot: b.pilot});
+}
+function berthInfo() {
+  const box = $("#berthinfo"), lines = [];
+  const v = vesselObj(), need = needM(v);
+  for (const which of ["origin", "dest"]) {
+    const p = S.meta.ports.find(q => q.code === $("#" + which).value);
+    if (!p || !p.berths || !p.berths.length) continue;
+    const b = p.berths.find(x => x.name === p.berth_name);
+    if (!b) continue;
+    const c = b.controlling_depth_m, ok = c != null && c >= need;
+    lines.push(`<div><b>${which === "origin" ? "FROM" : "TO"} ${esc(b.name)}</b><br>${esc(berthDepthText(b))}<br>` +
+      `${esc(v.name)} needs ${need.toFixed(2)} m (draught ${v.draught_m} m + UKC) &rarr; ` +
+      `<span class="${ok ? "ok" : "bad"}">${ok ? "fits" : "charted depth too shallow at low water"}</span>` +
+      `${b.fits && b.fits.length ? `<br><span style="opacity:.75">fits: ${b.fits.join(", ")}</span>` : ""}</div>`);
+  }
+  box.innerHTML = lines.join("<hr style='border:0;border-top:1px solid var(--rule);margin:5px 0'>") +
+    (lines.length ? `<div style="opacity:.6;font-size:10px;margin-top:4px">${esc(S.meta.berth_source || "")} &middot; not for navigation</div>` : "");
+  box.hidden = !lines.length;
+}
+function sailToBerth(code, id) {
+  if (S.picking) return;
+  $("#dest").value = code; fillBerthSelect("dest");
+  $("#dberth").value = id; applyBerth(code, id);
+  berthInfo(); plan();
+}
+["origin", "dest"].forEach(which => {
+  const sel = $(which === "origin" ? "#oberth" : "#dberth");
+  sel.addEventListener("change", () => { applyBerth($("#" + which).value, sel.value); berthInfo(); plan(); });
+});
+async function loadMpa() {
+  if (MPA || mpaLoading || !MPA_LAYERS.some(id => $("#" + id).checked) || $("#mpalayers").hidden) return;
+  mpaLoading = fetch("mpa.json").then(r => r.ok ? r.json() : null).catch(() => null);
+  MPA = await mpaLoading; mpaLoading = null;
+  if (MPA) { CM.setMpa(MPA); $("#mpasrc").textContent = MPA.source; }
+}
+function depthKey() {
+  const on = $("#L-mdepth").checked && !$("#mpalayers").hidden;
+  $("#depthkey").hidden = !on;
+  if (on) $("#depthkey").innerHTML = "<b style='font-size:9.5px;letter-spacing:.08em'>CHARTED DEPTH</b>" +
+    CM.MPA_BANDS.map(([, c, t]) => `<span><i class="sw" style="background:${c}"></i>${t}</span>`).join("") +
+    "<span><i class='sw' style='border:1px dashed #1f5f99'></i>dredged area</span>";
+}
+
 async function loadMeta() {
-  const res = await fetch("data.json");
+  let res = await fetch("data_mpa.json").catch(() => null);
+  if (!res || !res.ok) res = await fetch("data.json");
   DATA = await res.json();
   GRID = ENG.makeGrid(DATA);
   S.meta = DATA.meta;
@@ -570,7 +666,13 @@ async function loadMeta() {
   $("#vessel").value = S.meta.default_vessel;
   fillSnapshots();
   $("#snapshot").value = "synthetic";
-  $("#gridinfo").textContent = `board ${S.meta.grid[0]}×${S.meta.grid[1]} @ ${S.meta.resolution_deg}° (${fmt(S.meta.cell_nm[0] * NM, 0)} m) · depth: proxy`;
+  const hasMpa = !!DATA.layers.charted;
+  $("#gridinfo").textContent = `board ${S.meta.grid[0]}×${S.meta.grid[1]} @ ${S.meta.resolution_deg}° (${fmt(S.meta.cell_nm[0] * NM, 0)} m) · depth: ` +
+    (hasMpa ? "MPA chart where charted, GEBCO elsewhere" : /gebco/i.test(S.meta.depth_source || "") ? "GEBCO 2026" : "proxy");
+  $("#gridinfo").title = S.meta.depth_source || "";
+  $("#mpalayers").hidden = !hasMpa;
+  initBerths(); fillBerthSelect("origin"); fillBerthSelect("dest"); berthInfo();
+  loadMpa(); depthKey();
   CM.setMeta(S.meta);
   boardLegend();
   await loadShips();
@@ -580,6 +682,16 @@ async function loadMeta() {
 function pointArg(v) { return v.includes(",") ? v.split(",").map(Number) : v; }
 function routeLocal(q, benchmark) {
   const o = pointArg(q.origin), d = pointArg(q.destination), ships = activeShips(q);
+  // an MPA berth must be deep enough for this ship at chart datum (berth and pilotage track)
+  const v = S.meta.vessels.find(x => x.code === q.vessel) || vesselObj(), need = needM(v);
+  for (const x of [o, d]) {
+    const p = typeof x === "string" && S.meta.ports.find(q2 => q2.code === x);
+    const b = p && p.berths && p.berths.find(y => y.name === p.berth_name);
+    if (b && b.controlling_depth_m != null && b.controlling_depth_m < need)
+      return {found: false, reason: `${b.name}: the least charted depth to the berth is ${b.controlling_depth_m} m ` +
+        `(berth ${b.berth_depth_m} m, approach ${b.track_min_depth_m} m, chart datum); a ${v.name} needs ${need.toFixed(2)} m. ` +
+        `Pick a deeper berth (✕ marks the ones that do not fit) or a smaller ship.`};
+  }
   const label = x => typeof x === "string" ? S.meta.ports.find(p => p.code === x).name : `${x[0].toFixed(4)} N, ${x[1].toFixed(4)} E`;
   const plans = [];
   let net0 = null;
@@ -630,7 +742,7 @@ async function plan(benchmark = false) {
 }
 
 $("#plan").onclick = () => plan();
-$("#vessel").onchange = () => plan();
+$("#vessel").onchange = () => { fillBerthSelect("origin"); fillBerthSelect("dest"); berthInfo(); plan(); };
 $("#snapshot").onchange = async () => { S.ignored.clear(); await loadShips(); plan(); };
 $("#theme").onclick = () => {
   const dark = isDark();

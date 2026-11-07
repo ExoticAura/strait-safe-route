@@ -100,13 +100,33 @@ PORTS: Dict[str, Port] = {p.code: p for p in [
 # the modelled coastline - reached by a pilotage track from the nearest water
 # the route-planning board can use. When the file is present the terminal's
 # position becomes the berth and its approach becomes the start of that track.
+# With MPA's chart layers present (mpa.py) the berths are MPA's own named
+# berths (scripts/build_berths.py -> data/berths_mpa.json, git-ignored): the
+# default one per terminal is used here and every berth is offered in the
+# dashboard (BERTH_OPTIONS).
 _BERTHS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "berths.json")
-if os.path.exists(_BERTHS):
-    for _code, _b in json.load(open(_BERTHS)).items():
+_BERTHS_MPA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "berths_mpa.json")
+BERTH_OPTIONS: Dict[str, list] = {}
+BERTH_SOURCE = "modelled quay (OpenStreetMap coastline)"
+
+
+def _use_mpa_berths() -> bool:
+    from . import mpa
+    return mpa.enabled() and os.path.exists(_BERTHS_MPA)
+
+
+for _path in ([_BERTHS_MPA] if _use_mpa_berths() else []) + [_BERTHS]:
+    if not os.path.exists(_path):
+        continue
+    for _code, _b in json.load(open(_path)).items():
         PORTS[_code] = replace(PORTS[_code], lat=_b["berth"][0], lon=_b["berth"][1],
                                app_lat=_b["pilot"][0][0], app_lon=_b["pilot"][0][1],
                                berth_name=_b["name"], quay_hdg=_b["quay_hdg"],
                                pilot=tuple(tuple(x) for x in _b["pilot"]))
+        BERTH_OPTIONS[_code] = _b.get("berths", [])
+    if _path == _BERTHS_MPA:
+        BERTH_SOURCE = json.load(open(_path))[next(iter(json.load(open(_path))))].get("source", "MPA")
+    break
 
 TERMINALS = [c for c, p in PORTS.items() if p.kind == "terminal"]
 

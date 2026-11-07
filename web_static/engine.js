@@ -56,6 +56,8 @@
       g.dist[k] = dmm[k] / 1000; g.depth[k] = dcm[k] / 100;
       g.head[k] = hd[k] === 65535 ? NaN : hd[k] / 10;
     }
+    // cells whose depth is MPA-charted (present only in data_mpa.json)
+    g.charted = L.charted ? unb64(L.charted, Uint8Array) : null;
     g.zone = unb64(L.tss_zone, Uint8Array);
     g.cpaZone = unb64(L.cpa_zone, Uint8Array);
     const midLat = G.lat0 + (G.ny - 1) * G.res / 2;
@@ -140,7 +142,9 @@
         const yy = clip(y + dy, 0, g.ny - 1), xx = clip(x + dx, 0, nx - 1);
         const v = g.depth[yy * nx + xx]; if (v < m) m = v;
       }
-      dmin[y * nx + x] = m;
+      // MPA-charted cells already hold the depth over most of the cell, and
+      // edges never leave navigable cells: no neighbour minimum (network.py)
+      dmin[y * nx + x] = g.charted && g.charted[y * nx + x] ? g.depth[y * nx + x] : m;
     }
     const board = new Uint8Array(n);
     for (let k = 0; k < n; k++) {
@@ -312,7 +316,9 @@
   // ------------------------------------------------------------ smoothing
   function segmentCost(net, a, b) {
     const g = net.g, cfg = net.cfg;
-    const step = .4 * Math.min(g.dyNm, g.dxNm);
+    // MPA-charted water has no neighbour-depth margin: check it finely (network.py)
+    const fine = !!g.charted;
+    const step = (fine ? .05 : .4) * Math.min(g.dyNm, g.dxNm);
     const d = hav(a[0], a[1], b[0], b[1]);
     if (d <= 1e-9) return [0, 0, true];
     let n = Math.max(2, Math.ceil(d / step) + 1);
@@ -323,6 +329,7 @@
       const [iy, ix] = g.toIndex(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
       ks.push(iy * g.nx + ix);
     }
+    if (fine && !ks.every(k => !g.charted[k] || net.nav[k])) return [Infinity, d, false];
     let S = ks;
     if (short) S = [ks[0], ks[ks.length - 1]];
     else if (!ks.every(k => net.nav[k])) return [Infinity, d, false];

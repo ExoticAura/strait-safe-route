@@ -13,8 +13,10 @@ from .seagrid import LAND_GEOJSON, NM_PER_DEG, SeaGrid, load_land_polygons
 
 
 def land_geojson() -> Dict:
+    from . import mpa
+    path = mpa.land_geojson(LAND_GEOJSON) if mpa.enabled() else LAND_GEOJSON
     feats = []
-    for rings in load_land_polygons(LAND_GEOJSON):
+    for rings in load_land_polygons(path):
         feats.append({"type": "Feature", "properties": {"kind": "land"},
                       "geometry": {"type": "Polygon",
                                    "coordinates": [[[round(float(x), 5), round(float(y), 5)]

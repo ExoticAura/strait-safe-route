@@ -1,4 +1,8 @@
 import os, sys
+# The suite tests the model on GEBCO + OpenStreetMap (what CI has). The MPA
+# chart layers are tested in test_mpa.py on a small synthetic chart; run the
+# whole suite on the real MPA data (if in data/gss) with SAFEROUTE_MPA=1.
+os.environ.setdefault("SAFEROUTE_MPA", "0")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
