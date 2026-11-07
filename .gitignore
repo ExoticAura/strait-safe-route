@@ -8,3 +8,8 @@ outputs/*.pdf
 .venv/
 venv/
 web_static/_test.html
+
+# secrets and licensed data (check GeoSpace-Sea Terms of Use before sharing)
+.env
+.env.*
+data/gss/
