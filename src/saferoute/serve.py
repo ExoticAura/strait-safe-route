@@ -270,6 +270,10 @@ class Handler(SimpleHTTPRequestHandler):
         p = urlparse(self.path).path
         if "/world/b/" in p or "/vendor/" in p:
             self.send_header("Cache-Control", "public, max-age=86400")
+        elif p == "/" or p.endswith((".html", ".js", ".json")):
+            # the app and its data change with each deploy: always revalidate,
+            # so a redeploy shows up without a hard refresh
+            self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
     def log_message(self, fmt, *args):
