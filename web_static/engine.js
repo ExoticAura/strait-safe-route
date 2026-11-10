@@ -824,6 +824,7 @@
      then builds ONE snapshot: the vessels reporting at a chosen minute (each
      vessel's latest report at or before that minute, no older than holdMin, so a
      single missed report does not drop a ship), keeping the stationary ones. */
+  const minuteNum = t => { const d = Date.parse(t.replace(" ", "T") + ":00Z"); return d / 60000; };
   function parseAis(g, text) {
     const {head, rows} = parseCsv(text);
     const col = k => ALIAS[k].find(a => head.includes(a));
@@ -839,13 +840,15 @@
     });
     const timed = !!c.time && recs.length && recs.every(x => x.t);
     let minutes = [];
+    let start = null;
     if (timed) {
       recs.sort((a, b) => a.t < b.t ? -1 : a.t > b.t ? 1 : 0);
       minutes = [...new Set(recs.map(x => x.t))];
+      // index of the first record of each minute, so a snapshot only scans its window
+      start = new Map(); recs.forEach((x, i) => { x.tm = minuteNum(x.t); if (!start.has(x.t)) start.set(x.t, i); });
     }
-    return {c, recs, timed, minutes};
+    return {c, recs, timed, minutes, start};
   }
-  const minuteNum = t => { const d = Date.parse(t.replace(" ", "T") + ":00Z"); return d / 60000; };
   function busiestMinute(P) {
     const n = new Map(); P.recs.forEach(x => n.set(x.t, (n.get(x.t) || 0) + 1));
     let best = P.minutes[0], k = -1; n.forEach((v, t) => { if (v > k) { k = v; best = t; } });
@@ -857,17 +860,25 @@
     if (P.timed) {
       at = at || busiestMinute(P);
       const t1 = minuteNum(at), t0 = t1 - holdMin;
-      recs = recs.filter(x => { const t = minuteNum(x.t); return t <= t1 && t > t0; });
+      const k = P.minutes.indexOf(at), first = P.minutes[Math.max(0, k - holdMin)];
+      let i0 = P.start.get(first) || 0, i1 = i0;
+      while (i1 < recs.length && recs[i1].tm <= t1) i1++;
+      recs = recs.slice(i0, i1).filter(x => x.tm <= t1 && x.tm > t0);
     }
     if (c.mmsi) { const last = new Map(); recs.forEach(x => last.set(x.id || Math.random(), x)); recs = [...last.values()]; }
     reporting = recs.length;
-    const out = []; let moving = 0;
+    const out = [], under = []; let moving = 0;
     recs.forEach(({r, i}) => {
       const lat = +r[c.lat], lon = +r[c.lon];
       const sog = c.sog ? +r[c.sog] || 0 : 0, ns = c.nav && r[c.nav] !== "" ? +r[c.nav] : null;
       let status = c.status && r[c.status] ? r[c.status].toLowerCase() : null;
       if (!status) status = ns === 1 ? "anchored" : ns === 5 ? "moored" : ns === 6 ? "aground" : "stationary";
-      if (!(ns === 1 || ns === 5 || ns === 6 || sog <= .5 || (c.status && r[c.status]))) { moving++; return; }
+      if (!(ns === 1 || ns === 5 || ns === 6 || sog <= .5 || (c.status && r[c.status]))) {
+        moving++;
+        let cog = c.cog ? +r[c.cog] : NaN; if (!isFinite(cog) || cog >= 360) cog = c.heading ? +r[c.heading] || 0 : 0;
+        under.push({mmsi: c.mmsi ? +r[c.mmsi] || null : null, lat, lon, sog, cog});
+        return;
+      }
       let type = c.type && r[c.type] ? String(r[c.type]).toLowerCase() : "";
       if (/^\d+$/.test(type)) type = AIS_TYPE(type);
       if (!type && c.aistype) type = AIS_TYPE(r[c.aistype]);
@@ -883,7 +894,7 @@
         draught_m: (c.draught && +r[c.draught]) || dd, area: c.area ? r[c.area] || "" : "",
         depth_hint_m: clip(g.depth[iy * g.nx + ix], 8, 40), source: "ais"});
     });
-    return {ships: out, moving, reporting, at: P.timed ? at : null};
+    return {ships: out, moving, under, reporting, at: P.timed ? at : null};
   }
   function shipsFromCsv(g, text, at, holdMin) {
     return snapshotAt(g, parseAis(g, text), at, holdMin);

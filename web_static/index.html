@@ -1120,6 +1120,14 @@ html,body{height:100%}
         <input type="range" id="aist" min="0" max="0" step="1" value="0" style="flex:1">
         <button type="button" data-f="aisnext" title="One minute later">&#9654;</button>
       </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:5px">
+        <button type="button" data-f="aisplay" style="flex:1">&#9654; Play the day</button>
+        <select data-f="aisspeed" aria-label="Replay speed" title="AIS minutes per second">
+          <option value="2">2 min/s</option><option value="10" selected>10 min/s</option><option value="30">30 min/s</option>
+        </select>
+      </div>
+      <p class="note" style="margin:4px 0 0">While playing, the ships move minute by minute (grey arrows: under way, shown only).
+        The route is re-planned when you pause.</p>
     </div>
     <p class="note" data-f="uploadnote">Either the app&rsquo;s snapshot format, or a raw AIS extract
       (MMSI, time, Lat, Lon, SoG, NavStatus&hellip;) &mdash; stationary ships are picked out

@@ -122,7 +122,7 @@
     map.createPane("labels").style.zIndex = 350;
     map.getPane("labels").style.pointerEvents = "none";
     const G = {};
-    ["depth", "mdepth", "land", "board", "tss", "mtrk", "anch", "mhaz", "mberth", "env", "ships", "routes", "enc", "ports", "own"]
+    ["depth", "mdepth", "land", "board", "tss", "mtrk", "anch", "mhaz", "mberth", "env", "ships", "moving", "routes", "enc", "ports", "own"]
       .forEach(k => { G[k] = L.layerGroup().addTo(map); });
     const st = {meta: null, ships: null, result: null, sel: 0, dark: false, basemap: opts.basemap || "simple",
                 layers: {}, tiles: null, labels: null, seamark: null, board: null, boardImg: null,
@@ -320,7 +320,7 @@
             color: hit ? css("--bad") : col, opacity: hit ? .9 : .45, fillOpacity: hit ? .10 : .04,
             dashArray: s.status === "anchored" ? "3 3" : null, interactive: false}).addTo(G.env);
           if (s.status === "anchored" && z >= 12.5 && hav([s.lat, s.lon], [s.env[0], s.env[1]]) > .01) {
-            const h = s.heading_deg * Math.PI / 180, L2 = s.loa_m / 2;
+            const h = s.heading_deg * Math.PI / 180, L2 = .8 * s.loa_m;   // bow: 0.8 L ahead of the bridge
             const bow = offsetLL(s.lat, s.lon, L2 * Math.sin(h), L2 * Math.cos(h));
             L.polyline([bow, [s.env[0], s.env[1]]], {color: col, weight: 1, opacity: .7,
               dashArray: "2 3", interactive: false}).addTo(G.env);
@@ -339,6 +339,21 @@
         m.bindTooltip(tip, {sticky: true});
         if (opts.onShipClick) m.on("click", () => opts.onShipClick(s));
         m.addTo(G.ships);
+      });
+    }
+
+    /* ---------------- vessels under way (AIS replay; not obstacles) ---------------- */
+    function drawMoving() {
+      G.moving.clearLayers();
+      if (!st.moving || !st.moving.length || !st.layers.ships) return;
+      st.moving.forEach(v => {
+        const icon = L.divIcon({className: "mv-icon", iconSize: [14, 14], iconAnchor: [7, 7],
+          html: `<div style="transform:rotate(${v.cog}deg)"><svg viewBox="0 0 14 14" width="14" height="14">
+            <path d="M7 1 L11 12 L7 9.5 L3 12 Z" fill="#7a8794" stroke="#fff" stroke-width="1"/></svg></div>`});
+        L.marker([v.lat, v.lon], {icon, interactive: true, keyboard: false})
+          .bindTooltip(`MMSI ${v.mmsi || "?"} &middot; under way ${v.sog.toFixed(1)} kn &middot; ${Math.round(v.cog)}&deg;` +
+                       `<br><i>moving: shown only, not planned around</i>`, {sticky: true})
+          .addTo(G.moving);
       });
     }
 
@@ -469,7 +484,7 @@
     });
     map.on("zoomend moveend", updateScale);
 
-    function redrawAll() { drawLand(); drawDepth(); drawMpa(); drawBoard(); drawTss(); drawAnch(); drawShips(); drawRoutes(); drawPorts(); }
+    function redrawAll() { drawLand(); drawDepth(); drawMpa(); drawBoard(); drawTss(); drawAnch(); drawShips(); drawMoving(); drawRoutes(); drawPorts(); }
     const api = {
       map,
       setMeta(meta) {
@@ -479,6 +494,7 @@
         api.fitAll(); applyBasemap(); redrawAll();
       },
       setShips(ships) { st.ships = ships; drawShips(); },
+      setMoving(list) { st.moving = list || null; drawMoving(); },
       setMpa(m) { st.mpa = m; drawMpa(); },
       redrawMpa() { drawMpa(); },
       MPA_BANDS,

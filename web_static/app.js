@@ -515,17 +515,56 @@ function renderSnapshotCard(side, standalone) {
     sl.max = P.minutes.length - 1; sl.value = Math.max(0, P.minutes.indexOf(snap.at));
     f("aistval").textContent = `${snap.at} \u00b7 ${snap.ships.length} stationary`;
     sl.oninput = () => { f("aistval").textContent = P.minutes[+sl.value]; };
-    const go = i => useAisMinute($("#snapshot").value, P.minutes[Math.max(0, Math.min(P.minutes.length - 1, i))]);
+    const go = i => { stopAisPlay(false); useAisMinute($("#snapshot").value, P.minutes[Math.max(0, Math.min(P.minutes.length - 1, i))])
+                        .catch(e => { f("uploadnote").textContent = e.message; }); };
     sl.onchange = () => go(+sl.value);
     f("aisprev").onclick = () => go(+sl.value - 1);
     f("aisnext").onclick = () => go(+sl.value + 1);
+    const pb = f("aisplay"), sp = f("aisspeed");
+    pb.innerHTML = AISPLAY.timer ? "&#10074;&#10074; Pause" : "&#9654; Play the day";
+    sp.value = String(AISPLAY.speed);
+    sp.onchange = () => { AISPLAY.speed = +sp.value; if (AISPLAY.timer) { stopAisPlay(false); startAisPlay(); } };
+    pb.onclick = () => AISPLAY.timer ? stopAisPlay(true) : startAisPlay();
   }
+}
+/* replay of a raw AIS file: the minute advances on a timer and the ships on
+   the chart follow it; planning is heavier, so the route is re-planned once,
+   when the replay is paused */
+const AISPLAY = {timer: null, speed: 10};
+function aisShips(snapShips) {
+  return {key: S.ships.key, label: S.ships.label, source: "ais", captured_utc: "", notes: S.ships.notes,
+          counts: counts(snapShips), n: snapShips.length,
+          ships: snapShips.map(s => Object.assign({}, s, {env: ENG.envelope(s, S.swing)}))};
+}
+function startAisPlay() {
+  const key = $("#snapshot").value, P = AIS.get(key);
+  if (!P || !P.timed) return;
+  let i = Math.max(0, P.minutes.indexOf(SNAPS[key].at));
+  if (i >= P.minutes.length - 1) i = 0;
+  const step = () => {
+    i = Math.min(P.minutes.length - 1, i + 1);
+    const r = ENG.snapshotAt(GRID, P, P.minutes[i], AIS_HOLD_MIN);
+    SNAPS[key] = Object.assign({}, SNAPS[key], {ships: r.ships, at: r.at, under: r.under});
+    S.ships = aisShips(r.ships); CM.setShips(S.ships); CM.setMoving(r.under);
+    const sl = $("#aist"); if (sl) sl.value = i;
+    const v = $("[data-f=aistval]"); if (v) v.textContent = `${r.at} \u00b7 ${r.ships.length} stationary \u00b7 ${r.under.length} under way`;
+    if (i >= P.minutes.length - 1) stopAisPlay(true);
+  };
+  AISPLAY.timer = setInterval(step, Math.max(33, 1000 / AISPLAY.speed));
+  const pb = $("[data-f=aisplay]"); if (pb) pb.innerHTML = "&#10074;&#10074; Pause";
+}
+function stopAisPlay(replan) {
+  if (!AISPLAY.timer) return;
+  clearInterval(AISPLAY.timer); AISPLAY.timer = null;
+  const pb = $("[data-f=aisplay]"); if (pb) pb.innerHTML = "&#9654; Play the day";
+  if (replan) { const key = $("#snapshot").value; useAisMinute(key, SNAPS[key].at).catch(() => {}); }
 }
 async function useAisMinute(key, at) {
   const P = AIS.get(key), name = key.replace(/^upload:/, "");
-  const {ships, moving, reporting, at: t} = ENG.snapshotAt(GRID, P, at, AIS_HOLD_MIN);
+  const {ships, moving, under, reporting, at: t} = ENG.snapshotAt(GRID, P, at, AIS_HOLD_MIN);
+  CM.setMoving(under);
   if (!ships.length) throw new Error(`no stationary ships inside the study area${t ? " at " + t : ""} (${moving} under way were dropped)`);
-  SNAPS[key] = {key, label: "Uploaded - " + name, source: "ais", ships, at: t, captured_utc: t ? t + " (file time)" : "",
+  SNAPS[key] = {key, label: "Uploaded - " + name, source: "ais", ships, under, at: t, captured_utc: t ? t + " (file time)" : "",
     notes: [t ? `One snapshot at ${t}: ${reporting} vessels reporting (latest report within ${AIS_HOLD_MIN} min), ` +
                 `${ships.length} stationary kept, ${moving} under way dropped. ${P.minutes.length} minutes in the file; ` +
                 `use the slider to pick another.`
@@ -583,6 +622,7 @@ async function loadShips() {
              notes: snap.notes || [], counts: counts(snap.ships), n: snap.ships.length,
              ships: snap.ships.map(s => Object.assign({}, s, {env: ENG.envelope(s, S.swing)}))};
   CM.setShips(S.ships);
+  CM.setMoving(snap.under || null);
   wireWorld();
   S.board = null;
   if ($("#L-board").checked) loadBoard();
@@ -805,7 +845,7 @@ async function plan(benchmark = false) {
 
 $("#plan").onclick = () => plan();
 $("#vessel").onchange = () => { fillBerthSelect("origin"); fillBerthSelect("dest"); berthInfo(); plan(); };
-$("#snapshot").onchange = async () => { S.ignored.clear(); await loadShips(); plan(); };
+$("#snapshot").onchange = async () => { stopAisPlay(false); S.ignored.clear(); await loadShips(); plan(); };
 $("#theme").onclick = () => {
   const dark = isDark();
   document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
