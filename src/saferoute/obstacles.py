@@ -125,6 +125,16 @@ class ShipObstacle:
         dlon = ahead * math.sin(h) / (111_320.0 * math.cos(math.radians(self.lat)))
         return self.lat + dlat, self.lon + dlon
 
+    def hull_centre(self) -> Tuple[float, float]:
+        """Middle of the hull. An anchored ship's AIS position is its bridge,
+        0.8 LOA behind the bow (see centre()), so its hull centre is 0.3 LOA ahead."""
+        if self.status != "anchored":
+            return self.lat, self.lon
+        ahead = 0.3 * self.loa_m
+        h = math.radians(self.heading_deg)
+        return (self.lat + ahead * math.cos(h) / 111_320.0,
+                self.lon + ahead * math.sin(h) / (111_320.0 * math.cos(math.radians(self.lat))))
+
     def radius_m(self, swing: bool = True) -> float:
         if self.status == "anchored" and swing:
             return self.loa_m + self.scope_m()

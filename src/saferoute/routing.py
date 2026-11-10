@@ -99,7 +99,7 @@ def track_metrics(net: NavNetwork, coords: Sequence[Tuple[float, float]],
     enc: List[Dict] = []
     if snap is not None and len(snap.ships):
         env = np.array([s.envelope(net.cfg.swing) for s in snap.ships])
-        hull = np.array([(s.lat, s.lon, s.loa_m / 2.0 / M_PER_NM) for s in snap.ships])
+        hull = np.array([(*s.hull_centre(), s.loa_m / 2.0 / M_PER_NM) for s in snap.ships])
         # (points x ships) is fine at strait scale: ~2,000 x ~300.
         d_env = haversine_nm(pts[:, None, 0], pts[:, None, 1], env[None, :, 0], env[None, :, 1]) \
             - env[None, :, 2] - half_beam

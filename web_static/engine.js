@@ -86,6 +86,13 @@
   }
 
   // ------------------------------------------------------------ obstacles
+  // middle of the hull: an anchored ship's AIS position is its bridge, 0.8 LOA
+  // behind the bow (the anchor is 0.8 LOA + scope ahead), so 0.3 LOA ahead of it
+  function hullCentre(s) {
+    if (s.status !== "anchored") return [s.lat, s.lon];
+    const a = .3 * s.loa_m, h = rad(s.heading_deg || 0);
+    return [s.lat + a * Math.cos(h) / 111320, s.lon + a * Math.sin(h) / (111320 * Math.cos(rad(s.lat)))];
+  }
   function envelope(s, swing) {
     if (s.env_swing && s.env_hull) return swing ? s.env_swing : s.env_hull;
     const depth = Math.max(s.depth_hint_m || 20, 5);
@@ -625,7 +632,8 @@
           const de = hav(p[0], p[1], e[0], e[1]) - e[2] - hb;
           if (de < cpaEnv[j]) { cpaEnv[j] = de; kMin[j] = i; }
           if (de < net.target[k]) insideAny[i] = 1;
-          const dh = hav(p[0], p[1], ships[j].lat, ships[j].lon) - ships[j].loa_m / 2 / M_PER_NM - hb;
+          const hc = hullCentre(ships[j]);
+          const dh = hav(p[0], p[1], hc[0], hc[1]) - ships[j].loa_m / 2 / M_PER_NM - hb;
           if (dh < cpaHull[j]) cpaHull[j] = dh;
         }
       });
@@ -881,7 +889,7 @@
     return snapshotAt(g, parseAis(g, text), at, holdMin);
   }
 
-  const api = {edgeCost, pathCost, makeGrid, obstacleField, buildNet, search, planRoute, trackMetrics, smooth, sailLegs, TURN, envelope,
+  const api = {edgeCost, pathCost, hullCentre, makeGrid, obstacleField, buildNet, search, planRoute, trackMetrics, smooth, sailLegs, TURN, envelope,
                endpointCheck, nodeAt, shipsFromCsv, parseAis, snapshotAt, hav, initialBearing, MODES, BOARD_LABELS};
   root.SafeRouteEngine = api;
   if (typeof module !== "undefined") module.exports = api;

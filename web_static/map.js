@@ -30,8 +30,11 @@
       maxNativeZoom: 16, overlay: SEAMARK } : {
       url: `${ESRI}/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}`,
       labels: `${ESRI}/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}`,
+      // Esri's ocean basemap has full detail only to level 10 around Singapore;
+      // deeper levels return "Map data not yet available" tiles, so level 10
+      // is stretched for closer zooms (the OpenSeaMap seamarks stay sharp)
       attribution: `${ESRI_OCEAN} &middot; seamarks &copy; <a href="https://www.openseamap.org">OpenSeaMap</a>`,
-      maxNativeZoom: 13, overlay: SEAMARK },
+      maxNativeZoom: 10, overlay: SEAMARK },
     hybrid: () => ({
       url: `${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
       labels: `${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`,
@@ -89,9 +92,13 @@
     return [lat + n / 111320, lon + e / (111320 * Math.cos(lat * Math.PI / 180))];
   }
   function hullPolygon(s) {
-    // bow-pointed hull outline at true size around the AIS position
+    // bow-pointed hull outline at true size. An anchored ship's AIS position is
+    // taken as its bridge, 0.8 L behind the bow (obstacles.py / engine.js put the
+    // anchor 0.8 L + scope ahead of it), so the hull runs from 0.8 L ahead to
+    // 0.2 L astern and its stern sits on the swing circle; others are centred.
     const h = s.heading_deg * Math.PI / 180, L2 = s.loa_m / 2, B2 = s.beam_m / 2;
-    const pts = [[L2, 0], [L2 * .78, B2], [-L2, B2], [-L2, -B2], [L2 * .78, -B2]];
+    const c = s.status === "anchored" ? 0.3 * s.loa_m : 0;
+    const pts = [[L2 + c, 0], [L2 * .78 + c, B2], [-L2 + c, B2], [-L2 + c, -B2], [L2 * .78 + c, -B2]];
     return pts.map(([f, st]) => offsetLL(s.lat, s.lon, f * Math.sin(h) + st * Math.cos(h),
                                                      f * Math.cos(h) - st * Math.sin(h)));
   }

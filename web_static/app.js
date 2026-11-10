@@ -48,8 +48,11 @@ function readLayers() {
 }
 // the chosen base map is remembered in this browser; Chart (the model's own
 // coastline) needs no internet, the others load map tiles
+const BASEMAP_CHOICES = ["hybrid", "streets", "nautical", "simple"];
 function savedBasemap() {
-  try { return localStorage.getItem("sr-basemap") || "offline"; } catch (e) { return "offline"; }
+  let b = null;
+  try { b = localStorage.getItem("sr-basemap"); } catch (e) {}
+  return BASEMAP_CHOICES.includes(b) ? b : "streets";
 }
 
 const CM = ChartMap.create($("#chart"), {
@@ -65,7 +68,7 @@ const CM = ChartMap.create($("#chart"), {
   onBerthClick: (code, id) => sailToBerth(code, id),
   onBasemapFail: name => {
     syncBasemapUI();
-    $("#gridinfo").textContent = `${name} map tiles could not load here (this page may block outside map servers; they load on the Railway site) — showing Chart`;
+    $("#gridinfo").textContent = `${name} map tiles could not load here (this page may block outside map servers; they load on the Railway site) — showing the model's own coastline`;
     $("#gridinfo").classList.add("warn");
   },
 });
@@ -88,7 +91,7 @@ Object.values(LAYER_IDS).forEach(id => $("#" + id).onchange = () => {
   if (MPA_LAYERS.includes(id)) { loadMpa(); depthKey(); }
 });
 CM.setLayers(readLayers());
-CM.setBasemap("offline");
+CM.setBasemap(savedBasemap()); syncBasemapUI();
 $("#zin").onclick = () => CM.zoomIn();
 $("#zout").onclick = () => CM.zoomOut();
 $("#zfit").onclick = () => CM.fitResult();
@@ -157,7 +160,7 @@ function nearestShips(lat, lon, n = 6) {
   if (!S.ships) return [];
   const v = vesselObj(), halfBeam = v.beam_m / 2 / NM;
   return S.ships.ships.map(s => {
-    const c = CM.hav([lat, lon], [s.lat, s.lon]);
+    const c = CM.hav([lat, lon], ENG.hullCentre(s));
     const hull = c - s.loa_m / 2 / NM - halfBeam;
     // the router keeps clear of each ship's swing circle (centred on its anchor),
     // so the chart measures to the nearest point on that circle, not to the hull
