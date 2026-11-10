@@ -75,3 +75,38 @@ def test_upload_snapshot(server):
     with urllib.request.urlopen(req, timeout=60) as r:
         d = json.loads(r.read())
     assert d["n"] == 1 and d["ships"][0]["mmsi"] == 563000001
+
+
+def test_ais_csv_one_snapshot_per_minute(tmp_path):
+    """A raw AIS extract (one report per vessel per minute all day) must give ONE
+    snapshot at a chosen minute, not every vessel that appeared during the day."""
+    import json
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("node not installed")
+    rows = ["ReceiveTime,MMSI,NavStatus,SoG,Lat,Lon,Heading"]
+    for m in range(10):                                   # 00:00-00:09
+        rows.append(f"2026-04-30 00:{m:02d}:00,1,1,0.0,1.22,103.80,90")      # anchored all day
+        if m < 3:                                         # anchored early, then gone
+            rows.append(f"2026-04-30 00:{m:02d}:00,2,1,0.0,1.23,103.81,90")
+        if m >= 7:                                        # arrives late
+            rows.append(f"2026-04-30 00:{m:02d}:00,3,5,0.0,1.24,103.82,90")
+        rows.append(f"2026-04-30 00:{m:02d}:00,4,0,12.0,1.21,103.70,90")    # under way
+    js = """
+const E = require(process.argv[1]);
+const g = {inside: () => true, toIndex: () => [0, 0], depth: [20], nx: 1};
+const P = E.parseAis(g, process.argv[2]);
+const at = m => E.snapshotAt(g, P, m, 3).ships.map(s => s.id).sort();
+console.log(JSON.stringify({n: P.minutes.length, early: at('2026-04-30 00:01'),
+  mid: at('2026-04-30 00:05'), late: at('2026-04-30 00:09')}));
+"""
+    eng = str(__import__("pathlib").Path(__file__).resolve().parents[1] / "web_static" / "engine.js")
+    out = json.loads(subprocess.run([node, "-e", js, eng, "\n".join(rows)], capture_output=True,
+                                    text=True, check=True).stdout)
+    assert out["n"] == 10
+    assert out["early"] == ["1", "2"]
+    assert out["mid"] == ["1"]                 # vessel 2 last reported 00:02, older than 3 min
+    assert out["late"] == ["1", "3"]

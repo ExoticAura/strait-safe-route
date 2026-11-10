@@ -257,6 +257,21 @@
     return [d * w + cfg.w_entry * entry, d];
   }
 
+  // cost of a node path under this network's weights (Infinity if a move is not allowed)
+  function pathCost(net, path) {
+    const nx = net.g.nx;
+    let c = 0;
+    for (let i = 1; i < path.length; i++) {
+      const u = path[i - 1], v = path[i];
+      if (!net.nav[v]) return Infinity;
+      const y = (u / nx) | 0, x = u - y * nx, yy = (v / nx) | 0, xx = v - yy * nx;
+      const [e] = edgeCost(net, u, v, y, x, yy, xx);
+      if (!isFinite(e)) return Infinity;
+      c += e;
+    }
+    return c;
+  }
+
   // --------------------------------------------------------------- search
   function search(net, src, dst, useH = true) {
     const t0 = performance.now();
@@ -772,7 +787,7 @@
     return {label: net.cfg.mode, mode: net.cfg.mode, metrics: m, coords, encounters: enc,
             waypoints: tr.legs, turn_radii: radii,
             track: {d: tr.d, lat: tr.lat, lon: tr.lon, psi: tr.psi, kf: tr.kf, length_m: tr.length_m},
-            search: Object.assign({}, r, {path: undefined})};
+            search: Object.assign({}, r, {path: undefined}), gridPath: r.path};
   }
 
   // --------------------------------------------------------- CSV snapshots
@@ -795,21 +810,52 @@
     for (let i = 1; i < lines.length; i++) { const v = split(lines[i]); const o = {}; head.forEach((h, j) => o[h] = v[j]); rows.push(o); }
     return {head, rows};
   }
-  function shipsFromCsv(g, text) {
+  /* A raw AIS extract holds every vessel's report every minute for hours, so
+     taking all rows (or each vessel's last report of the file) stacks vessels
+     from different times onto one map. parseAis reads the file once; snapshotAt
+     then builds ONE snapshot: the vessels reporting at a chosen minute (each
+     vessel's latest report at or before that minute, no older than holdMin, so a
+     single missed report does not drop a ship), keeping the stationary ones. */
+  function parseAis(g, text) {
     const {head, rows} = parseCsv(text);
     const col = k => ALIAS[k].find(a => head.includes(a));
     const c = {}; for (const k in ALIAS) c[k] = col(k);
     if (!c.lat || !c.lon) throw new Error("the file needs latitude and longitude columns");
-    // last report per vessel
-    let recs = rows;
-    if (c.mmsi) {
-      if (c.time) recs = recs.slice().sort((a, b) => String(a[c.time]).localeCompare(String(b[c.time])));
-      const last = new Map(); recs.forEach(r => last.set(r[c.mmsi] || Math.random(), r)); recs = [...last.values()];
-    }
-    const out = []; let moving = 0;
-    recs.forEach((r, i) => {
+    const minuteOf = v => { const m = String(v || "").trim().replace("T", " ").match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2})/);
+                            return m ? m[1] : null; };
+    const recs = [];
+    rows.forEach((r, i) => {
       const lat = +r[c.lat], lon = +r[c.lon];
       if (!isFinite(lat) || !isFinite(lon) || !g.inside(lat, lon)) return;
+      recs.push({r, i, t: c.time ? minuteOf(r[c.time]) : null, id: c.mmsi ? r[c.mmsi] : null});
+    });
+    const timed = !!c.time && recs.length && recs.every(x => x.t);
+    let minutes = [];
+    if (timed) {
+      recs.sort((a, b) => a.t < b.t ? -1 : a.t > b.t ? 1 : 0);
+      minutes = [...new Set(recs.map(x => x.t))];
+    }
+    return {c, recs, timed, minutes};
+  }
+  const minuteNum = t => { const d = Date.parse(t.replace(" ", "T") + ":00Z"); return d / 60000; };
+  function busiestMinute(P) {
+    const n = new Map(); P.recs.forEach(x => n.set(x.t, (n.get(x.t) || 0) + 1));
+    let best = P.minutes[0], k = -1; n.forEach((v, t) => { if (v > k) { k = v; best = t; } });
+    return best;
+  }
+  function snapshotAt(g, P, at, holdMin = 3) {
+    const c = P.c;
+    let recs = P.recs, reporting = 0;
+    if (P.timed) {
+      at = at || busiestMinute(P);
+      const t1 = minuteNum(at), t0 = t1 - holdMin;
+      recs = recs.filter(x => { const t = minuteNum(x.t); return t <= t1 && t > t0; });
+    }
+    if (c.mmsi) { const last = new Map(); recs.forEach(x => last.set(x.id || Math.random(), x)); recs = [...last.values()]; }
+    reporting = recs.length;
+    const out = []; let moving = 0;
+    recs.forEach(({r, i}) => {
+      const lat = +r[c.lat], lon = +r[c.lon];
       const sog = c.sog ? +r[c.sog] || 0 : 0, ns = c.nav && r[c.nav] !== "" ? +r[c.nav] : null;
       let status = c.status && r[c.status] ? r[c.status].toLowerCase() : null;
       if (!status) status = ns === 1 ? "anchored" : ns === 5 ? "moored" : ns === 6 ? "aground" : "stationary";
@@ -829,11 +875,14 @@
         draught_m: (c.draught && +r[c.draught]) || dd, area: c.area ? r[c.area] || "" : "",
         depth_hint_m: clip(g.depth[iy * g.nx + ix], 8, 40), source: "ais"});
     });
-    return {ships: out, moving};
+    return {ships: out, moving, reporting, at: P.timed ? at : null};
+  }
+  function shipsFromCsv(g, text, at, holdMin) {
+    return snapshotAt(g, parseAis(g, text), at, holdMin);
   }
 
-  const api = {edgeCost, makeGrid, obstacleField, buildNet, search, planRoute, trackMetrics, smooth, sailLegs, TURN, envelope,
-               endpointCheck, nodeAt, shipsFromCsv, hav, initialBearing, MODES, BOARD_LABELS};
+  const api = {edgeCost, pathCost, makeGrid, obstacleField, buildNet, search, planRoute, trackMetrics, smooth, sailLegs, TURN, envelope,
+               endpointCheck, nodeAt, shipsFromCsv, parseAis, snapshotAt, hav, initialBearing, MODES, BOARD_LABELS};
   root.SafeRouteEngine = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

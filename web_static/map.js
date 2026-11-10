@@ -402,11 +402,14 @@
       if (!own) return;
       const nearest = (own.nearest || []).slice(0, 3);
       nearest.forEach(n => {
-        L.polyline([[own.lat, own.lon], [n.lat, n.lon]], {color: css(n.cls === "bad" ? "--bad" : n.cls === "warn" ? "--warn" : "--ink-2"),
+        const to = n.edge || [n.lat, n.lon], d = n.edge ? n.env_nm : n.hull_nm;
+        L.polyline([[own.lat, own.lon], to], {color: css(n.cls === "bad" ? "--bad" : n.cls === "warn" ? "--warn" : "--ink-2"),
           weight: 1.2, dashArray: "4 3", interactive: false}).addTo(G.own);
+        L.circleMarker(to, {radius: 2.5, color: css("--ink-2"), weight: 1, fillColor: "#fff", fillOpacity: 1,
+          interactive: false}).addTo(G.own);
         L.tooltip({permanent: true, direction: "center", className: "port-label"})
-          .setLatLng([(own.lat + n.lat) / 2, (own.lon + n.lon) / 2])
-          .setContent(`${n.hull_nm.toFixed(2)} NM`).addTo(G.own);
+          .setLatLng([(own.lat + to[0]) / 2, (own.lon + to[1]) / 2])
+          .setContent(`${d.toFixed(2)} NM`).addTo(G.own);
       });
       if (map.getZoom() >= 13.5 && own.vessel) {
         L.polygon(hullPolygon({lat: own.lat, lon: own.lon, heading_deg: own.heading,

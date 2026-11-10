@@ -159,11 +159,16 @@ function nearestShips(lat, lon, n = 6) {
   return S.ships.ships.map(s => {
     const c = CM.hav([lat, lon], [s.lat, s.lon]);
     const hull = c - s.loa_m / 2 / NM - halfBeam;
+    // the router keeps clear of each ship's swing circle (centred on its anchor),
+    // so the chart measures to the nearest point on that circle, not to the hull
+    const ce = CM.hav([lat, lon], [s.env[0], s.env[1]]), env = ce - s.env[2] - halfBeam;
+    const k = ce > 1e-9 ? Math.min(1, s.env[2] / ce) : 0;
+    const edge = [s.env[0] + (lat - s.env[0]) * k, s.env[1] + (lon - s.env[1]) * k];
     return {s, lat: s.lat, lon: s.lon, hull_nm: Math.max(hull, 0), centre_nm: c,
-            env_nm: CM.hav([lat, lon], [s.env[0], s.env[1]]) - s.env[2] - halfBeam,
+            env_nm: Math.max(env, 0), edge,
             brg: CM.bearing([lat, lon], [s.lat, s.lon]),
-            cls: hull < 0.2 ? "bad" : hull < 0.5 ? "warn" : ""};
-  }).filter(o => !S.ignored.has(o.s.ship_type)).sort((a, b) => a.hull_nm - b.hull_nm).slice(0, n);
+            cls: env < 0.2 ? "bad" : env < 0.5 ? "warn" : ""};
+  }).filter(o => !S.ignored.has(o.s.ship_type)).sort((a, b) => a.env_nm - b.env_nm).slice(0, n);
 }
 /* ---- the ship along the route ----
    The engine returns the SAILED track (engine.js sailLegs): the planned legs
@@ -254,10 +259,10 @@ function paintOwnCard(st) {
   f("shiphdg").textContent = Math.round(st.pt.heading) + "°";
   f("nearest").innerHTML = st.near.slice(0, 6).map(o =>
     `<div><span>${esc(o.s.name || o.s.id)} · ${esc(o.s.ship_type)} ${Math.round(o.s.loa_m)} m · ${Math.round(o.brg)}°</span>
-      <span class="${o.cls}">${fmt(o.hull_nm, 2)} NM · ${fmt(o.hull_nm * NM, 0)} m</span></div>`).join("")
+      <span class="${o.cls}" title="to the swing circle / to the hull">${fmt(o.env_nm, 2)} / ${fmt(o.hull_nm, 2)} NM</span></div>`).join("")
     || `<div><span>no ships in the snapshot</span></div>`;
-  f("shipnote").textContent = "Distances are hull to hull at the snapshot positions (your ship's side to the other ship's nearest end). "
-    + "The router plans against the larger swing circle of each anchored ship.";
+  f("shipnote").textContent = "First figure: your ship's side to the edge of the other ship's swing circle, which is what the router "
+    + "keeps clear of (dashed lines on the chart). Second: hull to hull at the snapshot positions.";
 }
 function loadShip(el) {
   if (SHIP) { SHIP.attach(el); updateOwn(); return Promise.resolve(SHIP); }
@@ -491,20 +496,42 @@ function renderSnapshotCard(side, standalone) {
   fi.onchange = async () => {
     const file = fi.files[0]; if (!file) return;
     f("uploadnote").textContent = `Reading ${file.name}…`;
+    await tick();
     try {
-      const text = await file.text();
-      const {ships, moving} = ENG.shipsFromCsv(GRID, text);
-      if (!ships.length) throw new Error(`no stationary ships inside the study area (${moving} under way were dropped)`);
+      const P = ENG.parseAis(GRID, await file.text());
       const key = "upload:" + file.name;
-      SNAPS[key] = {key, label: "Uploaded - " + file.name, source: "ais", ships,
-                    notes: [`${ships.length} stationary kept, ${moving} under way dropped (SOG > 0.5 kn and not anchored/moored)`]};
-      S.meta.snapshots[key] = SNAPS[key].label;
-      NETS.clear(); FIELDS.clear();
-      fillSnapshots(); $("#snapshot").value = key;
-      S.ignored.clear();
-      await loadShips(); plan();
+      AIS.set(key, P);
+      await useAisMinute(key, P.timed ? null : undefined);
     } catch (e) { f("uploadnote").textContent = "Could not use that file: " + e.message; }
   };
+  // one snapshot per minute: the time slider picks which minute is on the map
+  const box = f("aistime"), P = AIS.get($("#snapshot").value);
+  box.hidden = !(P && P.timed && P.minutes.length > 1);
+  if (!box.hidden) {
+    const sl = $("#aist", side), snap = SNAPS[$("#snapshot").value];
+    sl.max = P.minutes.length - 1; sl.value = Math.max(0, P.minutes.indexOf(snap.at));
+    f("aistval").textContent = `${snap.at} \u00b7 ${snap.ships.length} stationary`;
+    sl.oninput = () => { f("aistval").textContent = P.minutes[+sl.value]; };
+    const go = i => useAisMinute($("#snapshot").value, P.minutes[Math.max(0, Math.min(P.minutes.length - 1, i))]);
+    sl.onchange = () => go(+sl.value);
+    f("aisprev").onclick = () => go(+sl.value - 1);
+    f("aisnext").onclick = () => go(+sl.value + 1);
+  }
+}
+async function useAisMinute(key, at) {
+  const P = AIS.get(key), name = key.replace(/^upload:/, "");
+  const {ships, moving, reporting, at: t} = ENG.snapshotAt(GRID, P, at, AIS_HOLD_MIN);
+  if (!ships.length) throw new Error(`no stationary ships inside the study area${t ? " at " + t : ""} (${moving} under way were dropped)`);
+  SNAPS[key] = {key, label: "Uploaded - " + name, source: "ais", ships, at: t, captured_utc: t ? t + " (file time)" : "",
+    notes: [t ? `One snapshot at ${t}: ${reporting} vessels reporting (latest report within ${AIS_HOLD_MIN} min), ` +
+                `${ships.length} stationary kept, ${moving} under way dropped. ${P.minutes.length} minutes in the file; ` +
+                `use the slider to pick another.`
+              : `${ships.length} stationary kept, ${moving} under way dropped (SOG > 0.5 kn and not anchored/moored)`]};
+  S.meta.snapshots[key] = SNAPS[key].label;
+  NETS.clear(); FIELDS.clear();
+  fillSnapshots(); $("#snapshot").value = key;
+  S.ignored.clear();
+  await loadShips(); await plan();
 }
 
 /* =====================================================================
@@ -512,7 +539,8 @@ function renderSnapshotCard(side, standalone) {
    ===================================================================== */
 const ENG = window.SafeRouteEngine;
 let DATA = null, GRID = null;
-const SNAPS = {}, FIELDS = new Map(), NETS = new Map();
+const SNAPS = {}, FIELDS = new Map(), NETS = new Map(), AIS = new Map();
+const AIS_HOLD_MIN = 3;   // a vessel counts if it reported in the 3 minutes up to the chosen minute
 const tick = () => new Promise(r => setTimeout(r, 30));
 
 function routeQuery() {
@@ -623,8 +651,9 @@ function berthInfo() {
       `<span class="${ok ? "ok" : "bad"}">${ok ? "fits" : "charted depth too shallow at low water"}</span>` +
       `${b.fits && b.fits.length ? `<br><span style="opacity:.75">fits: ${b.fits.join(", ")}</span>` : ""}</div>`);
   }
-  box.innerHTML = lines.join("<hr style='border:0;border-top:1px solid var(--rule);margin:5px 0'>") +
-    (lines.length ? `<div style="opacity:.6;font-size:10px;margin-top:4px">${esc(S.meta.berth_source || "")} &middot; not for navigation</div>` : "");
+  const open = box.querySelector("details") ? box.querySelector("details").open : true;
+  box.innerHTML = lines.length ? `<details${open ? " open" : ""}><summary>Berth depth check</summary>` +
+    lines.join("<hr style='border:0;border-top:1px solid var(--rule);margin:5px 0'>") + "</details>" : "";
   box.hidden = !lines.length;
 }
 function sailToBerth(code, id) {
@@ -641,7 +670,7 @@ async function loadMpa() {
   if (MPA || mpaLoading || !MPA_LAYERS.some(id => $("#" + id).checked) || $("#mpalayers").hidden) return;
   mpaLoading = fetch("mpa.json").then(r => r.ok ? r.json() : null).catch(() => null);
   MPA = await mpaLoading; mpaLoading = null;
-  if (MPA) { CM.setMpa(MPA); $("#mpasrc").textContent = MPA.source; }
+  if (MPA) CM.setMpa(MPA);
 }
 function depthKey() {
   const on = $("#L-mdepth").checked && !$("#mpalayers").hidden;
@@ -651,8 +680,13 @@ function depthKey() {
     "<span><i class='sw' style='border:1px dashed #1f5f99'></i>dredged area</span>";
 }
 
+/* MPA GeoSpace-Sea (charted depths, hazards, named berths) is kept for the
+   final project but switched off on the site for now. To reinstate it set
+   MPA_ENABLED = true (or open the site with ?mpa=1 to preview it). */
+const MPA_ENABLED = false || new URLSearchParams(location.search).get("mpa") === "1";
+
 async function loadMeta() {
-  let res = await fetch("data_mpa.json").catch(() => null);
+  let res = MPA_ENABLED ? await fetch("data_mpa.json").catch(() => null) : null;
   if (!res || !res.ok) res = await fetch("data.json");
   DATA = await res.json();
   GRID = ENG.makeGrid(DATA);
@@ -679,6 +713,30 @@ async function loadMeta() {
   await plan();
 }
 
+/* Each mode searches on its own and, when the ship cannot make a turn, closes
+   the water round it and searches again. That repair is local, so it can push
+   one mode onto a much longer detour while another mode found a sailable route
+   that this mode would also have scored cheaper. Re-score every sailable route
+   under each mode's own weights and keep the cheapest one, so Shortest is never
+   beaten by a route it could have taken. */
+function crossCheckModes(q, plans) {
+  const nets = Object.fromEntries(plans.map(p => [p.mode, netFor(q, p.mode)]));
+  const ok = plans.filter(p => p.metrics.feasible && p.gridPath && p.gridPath.length);
+  plans.forEach((p, i) => {
+    const net = nets[p.mode];
+    let best = p, bestC = p.metrics.feasible ? ENG.pathCost(net, p.gridPath) : Infinity;
+    ok.forEach(o => {
+      if (o === p) return;
+      const c = ENG.pathCost(net, o.gridPath);
+      if (c < bestC - 1e-6) { best = o; bestC = c; }
+    });
+    if (best !== p) {
+      plans[i] = Object.assign({}, best, {label: p.label, mode: p.mode,
+        metrics: Object.assign({}, best.metrics, {cost_effective_nm: bestC, shared_with: best.mode})});
+    }
+  });
+}
+
 function pointArg(v) { return v.includes(",") ? v.split(",").map(Number) : v; }
 function routeLocal(q, benchmark) {
   const o = pointArg(q.origin), d = pointArg(q.destination), ships = activeShips(q);
@@ -703,6 +761,7 @@ function routeLocal(q, benchmark) {
     if (p) plans.push(p);
   }
   if (!plans.length) return {found: false, reason: "no route satisfies every hard limit for this ship"};
+  crossCheckModes(q, plans);
   let bench = null;
   if (benchmark) {
     const src = ENG.nodeAt(net0, ...(typeof o === "string" ? [S.meta.ports.find(p => p.code === o).lat, S.meta.ports.find(p => p.code === o).lon] : o));
