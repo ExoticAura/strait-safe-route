@@ -157,7 +157,8 @@ OD_PAIRS: List[Tuple[str, str]] = (
 
 
 # --------------------------------------------------------------------------
-# MPA anchorages (Singapore Port Information 2025). One row per reference
+# MPA anchorages (Singapore Port Information 2025, "Least Depths of
+# Anchorages"): 29 anchorages, 34 reference positions. One row per reference
 # position: (code, name, charted depth m, lat, lon). Purpose drives the mix of
 # ship types placed there by the synthetic snapshot.
 # --------------------------------------------------------------------------
@@ -196,8 +197,6 @@ ANCHORAGE_POINTS: List[Tuple[str, str, float, float, float]] = [
     ("ASUEX", "Sudong Explosive",              19.5,  _dm(1, 10.278), _dm(103, 42.685)),
     ("ASSPU", "Sudong Special Purpose",        17.7,  _dm(1, 11.040), _dm(103, 42.434)),
     ("ASH",   "Sudong Holding",                23.2,  _dm(1, 12.051), _dm(103, 39.978)),
-    ("AVLCC", "Very Large Crude Carrier",      22.6,  _dm(1, 13.499), _dm(103, 39.125)),
-    ("AVLCC", "Very Large Crude Carrier",      22.6,  _dm(1, 13.611), _dm(103, 39.185)),
 ]
 
 PILOT_BOARDING: List[Tuple[str, str, float, float]] = [
@@ -214,8 +213,7 @@ PILOT_BOARDING: List[Tuple[str, str, float, float]] = [
 # What each anchorage is for, by code prefix -> weights over ship types. Used
 # only by the synthetic snapshot; a real AIS snapshot carries its own types.
 ANCHORAGE_USE = {
-    "petroleum": ("AEPA", "AEPBB", "AEPBC", "AWPA", "AWPB", "ARP", "ASPP", "ASPH",
-                  "AVLCC"),
+    "petroleum": ("AEPA", "AEPBB", "AEPBC", "AWPA", "AWPB", "ARP", "ASPP", "ASPH"),
     "bunkering": ("AEBA", "AEBB", "AEBC"),
     "holding":   ("AEHA", "AEHB", "AEHC", "AWH", "ASH"),
     "general":   ("AEW", "AWW", "ASPLU", "ACGP", "AWQI", "ARAFR", "AESPA",

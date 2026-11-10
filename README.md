@@ -28,29 +28,29 @@ python -m saferoute.serve            # opens the chart at http://127.0.0.1:8765
 | **2. Static pathfinding** | Dijkstra, A* (admissible great-circle heuristic), weighted A*, spatially distinct alternatives, Theta*-style smoothing, turn radii per waypoint (sailed track, re-search if a turn is too tight); three objectives: shortest / balanced / safest | `algorithms.py`, `network.py`, `sailing.py`, `routing.py` |
 | **3. Baseline route validation** | Paired comparison with historical voyages on distance and reliability (ships met, closest approach, hard breaches, shallow water, land), t-test + Wilcoxon | `ais.py`, `evaluation.py`, `scripts/run_pipeline.py` |
 
-## Headline results (Panamax, synthetic snapshot of 181 ships, GEBCO 2026 depths; `outputs/`)
+## Headline results (Panamax, synthetic snapshot of 178 ships in MPA's 29 anchorages, GEBCO 2026 depths; `outputs/`)
 
 All figures are measured on the **sailed track** (the legs joined by the
 turns the ship can actually make, see *How the ship turns*), not on the
 search polyline.
 
 * **Safest vs shortest**, averaged over all 16 entrance↔berth routes: ships
-  met **2.12 vs 6.19** (−66 %), NM sailed inside a target CPA ****1.11 vs 4.12****,
-  for +0.07 NM (38.82 vs 38.75 NM). East entrance → Pasir Panjang berth:
+  met **2.00 vs 6.19** (−68 %), NM sailed inside a target CPA **1.06 vs 4.07**,
+  for no extra distance on average (38.62 vs 38.62 NM). East entrance → Pasir Panjang berth:
   **5 ships met instead of 14** for +0.65 NM.
 * **A\* vs Dijkstra**: identical optimal cost on every route (gap 0.0); A\*
-  expands **48 % fewer nodes** than Dijkstra on the 16-neighbour graph.
+  expands **49 % fewer nodes** than Dijkstra on the 16-neighbour graph.
 * **Validation** against 320 baseline voyages (current-practice lane following
   that knows land and depth but not where ships are anchored, to the same
-  berths): planned routes are **5.4 % shorter** and meet **75 % fewer ships**
-  (safest mode; 7.6 → 1.9 per voyage, p < 0.0001); **100 %** of planned
-  routes are free of hard CPA breaches against **43 %** of baseline voyages.
+  berths): planned routes are **5.8 % shorter** and meet **74 % fewer ships**
+  (safest mode; 7.1 → 1.8 per voyage, p < 0.0001); **100 %** of planned
+  routes are free of hard CPA breaches against **59 %** of baseline voyages.
   (The baseline now also crosses water GEBCO shows too shallow for the ship.)
 * **Re-planning as traffic moves** (`scripts/replan_benchmark.py`, 369
-  re-plans, 181 anchored + 40 moving simulated ships, 2-core 2.1 GHz Xeon):
+  re-plans, 178 anchored + 40 moving simulated ships):
   a full re-plan (traffic, obstacle field, graph, search, sail, measure)
-  takes **0.49 s median, 1.3 s 95th percentile, 1.9 s worst** - under a
-  fifth of a 10 s cycle. **99 %** found a feasible route; the 3 that did not
+  takes **0.66 s median, 1.6 s 95th percentile, 2.3 s worst** - under a
+  quarter of a 10 s cycle. **99 %** found a feasible route; the 3 that did not
   (East → Pasir Panjang, about 3650 s into the run) are a known gap.
 * **Turning**: every route, for every ship class, is sailable: no turn tighter
   than 1.5 ship lengths at sea (1 L in pilotage waters). The sailed track is
@@ -260,13 +260,13 @@ API: see the docstring of `src/saferoute/serve.py`.
 GEBCO 2026 (Esri ASCII, N 1.45 / S 1.03 / W 103.40 / E 104.45) is in
 `data/bathymetry/` and loaded automatically (the status bar names the file).
 Without a file the board falls back to a **declared proxy** (depth rises with
-distance from the coastline). Both were checked against the 36 charted depths
-MPA publishes for its anchorages (`outputs/s1_proxy_vs_charted_depth.csv`):
+distance from the coastline). Both were checked against the 34 charted depths
+MPA publishes for its 29 anchorages (`outputs/s1_proxy_vs_charted_depth.csv`):
 
 | depth source | mean abs. error | bias | within 3 m |
 |---|---|---|---|
-| shore-distance proxy | 5.9 m | +2.0 m | 12 / 36 |
-| GEBCO 2026 (+ dredged pockets) | 7.2 m | +2.2 m | 9 / 36 |
+| shore-distance proxy | 6.0 m | +2.4 m | 11 / 34 |
+| GEBCO 2026 (+ dredged pockets) | 7.5 m | +2.4 m | 7 / 34 |
 
 GEBCO is not better than the proxy at these points: its ~460 m cells are
 smoothed and partly predicted in the shallow strait. What it adds is real
